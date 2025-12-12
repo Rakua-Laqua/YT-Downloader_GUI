@@ -223,7 +223,15 @@
         </Border>
 
         <!-- ダウンロードキュー -->
-        <TextBlock Grid.Row="1" Text="ダウンロードキュー" FontSize="16" FontWeight="SemiBold" Margin="0,10,0,10"/>
+        <Grid Grid.Row="1" Margin="0,10,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="ダウンロードキュー" FontSize="16" FontWeight="SemiBold"/>
+            <TextBlock Grid.Column="1" Text="{Binding DownloadQueueSummaryText}"
+                       Foreground="Gray" FontSize="13" VerticalAlignment="Bottom"/>
+        </Grid>
 
         <Border Grid.Row="2" Background="#F5F5F5" Padding="10" CornerRadius="8">
             <Grid>

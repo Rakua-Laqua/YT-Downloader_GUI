@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -46,6 +47,9 @@ public partial class DownloadViewModel : ViewModelBase
             vm.UpdateFromJob();
             DownloadQueue.Add(vm);
         }
+
+        DownloadQueue.CollectionChanged += OnDownloadQueueCollectionChanged;
+        UpdateQueueSummary();
     }
 
     #region プロパティ
@@ -94,6 +98,10 @@ public partial class DownloadViewModel : ViewModelBase
 
     public ObservableCollection<DownloadJobViewModel> DownloadQueue { get; } = new();
     public ObservableCollection<PlaylistItemViewModel> PlaylistItems { get; } = new();
+
+    public int DownloadQueueTotal => DownloadQueue.Count;
+    public int DownloadQueueCompleted => DownloadQueue.Count(j => j.Status == DownloadStatus.Completed);
+    public string DownloadQueueSummaryText => $"{DownloadQueueCompleted}/{DownloadQueueTotal}";
 
     public string[] VideoFormats { get; } = { "mp4", "mkv", "webm" };
     public string[] AudioFormats { get; } = { "mp3", "m4a", "wav" };
@@ -348,6 +356,18 @@ public partial class DownloadViewModel : ViewModelBase
 
     #region イベントハンドラ
 
+    private void OnDownloadQueueCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        UpdateQueueSummary();
+    }
+
+    private void UpdateQueueSummary()
+    {
+        OnPropertyChanged(nameof(DownloadQueueTotal));
+        OnPropertyChanged(nameof(DownloadQueueCompleted));
+        OnPropertyChanged(nameof(DownloadQueueSummaryText));
+    }
+
     private void OnJobProgressChanged(object? sender, DownloadJobEventArgs e)
     {
         Application.Current.Dispatcher.Invoke(() =>
@@ -363,6 +383,7 @@ public partial class DownloadViewModel : ViewModelBase
         {
             var jobVm = DownloadQueue.FirstOrDefault(j => j.Job.Id == e.Job.Id);
             jobVm?.UpdateFromJob();
+            UpdateQueueSummary();
         });
     }
 
