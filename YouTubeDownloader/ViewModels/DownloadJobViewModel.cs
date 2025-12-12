@@ -25,6 +25,7 @@ public partial class DownloadJobViewModel : ObservableObject
     public string Title => _job.VideoMetadata.Title;
     public string Channel => _job.VideoMetadata.Channel;
     public string ThumbnailUrl => _job.VideoMetadata.ThumbnailUrl;
+    public string Url => _job.VideoMetadata.Url;
 
     [ObservableProperty]
     private DownloadStatus _status;

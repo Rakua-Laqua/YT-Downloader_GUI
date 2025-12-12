@@ -22,4 +22,5 @@ public class VideoMetadataViewModel : ObservableObject
     public string LocalFilePath => Metadata.LocalFilePath;
     public string Format => Metadata.Format;
     public string DownloadedAt => Metadata.DownloadedAt.ToString("yyyy/MM/dd HH:mm");
+    public string Url => Metadata.Url;
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -353,6 +354,46 @@ public partial class DownloadViewModel : ViewModelBase
         }
 
         _downloadManager.ClearCompleted();
+    }
+
+    [RelayCommand]
+    private void OpenVideoLink(DownloadJobViewModel? job)
+    {
+        if (job == null)
+        {
+            return;
+        }
+
+        var url = job.Url;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            MessageBox.Show("動画URLがありません。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var result = MessageBox.Show(
+            $"YouTubeを既定ブラウザで開きますか？\n\n{job.Title}\n{url}",
+            "確認",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"ブラウザを開けませんでした: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     #endregion

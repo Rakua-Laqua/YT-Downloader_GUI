@@ -277,7 +277,15 @@
                                         <!-- 情報 -->
                                         <StackPanel Grid.Column="1" Grid.Row="0" Margin="10,0" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
-                                                       TextTrimming="CharacterEllipsis"/>
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="Blue" TextDecorations="Underline" Cursor="Hand"
+                                                       ToolTip="{Binding Url}">
+                                                <TextBlock.InputBindings>
+                                                    <MouseBinding MouseAction="LeftClick"
+                                                                  Command="{Binding DataContext.OpenVideoLinkCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                </TextBlock.InputBindings>
+                                            </TextBlock>
                                             <TextBlock Text="{Binding StatusText}" Foreground="Gray" FontSize="12"/>
                                         </StackPanel>
 

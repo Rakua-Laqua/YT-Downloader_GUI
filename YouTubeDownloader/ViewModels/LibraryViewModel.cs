@@ -119,6 +119,46 @@ public partial class LibraryViewModel : ViewModelBase
         }
     }
 
+    [RelayCommand]
+    private void OpenVideoLink(VideoMetadataViewModel? item)
+    {
+        if (item == null)
+        {
+            return;
+        }
+
+        var url = item.Url;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            MessageBox.Show("動画URLがありません。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var result = MessageBox.Show(
+            $"YouTubeを既定ブラウザで開きますか？\n\n{item.Title}\n{url}",
+            "確認",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"ブラウザを開けませんでした: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     #endregion
 
     public async Task LoadAsync()
