@@ -232,9 +232,17 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <Button Grid.Row="0" Content="完了済みをクリア"
+                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,10">
+                    <Button Content="全キャンセル"
+                        Command="{Binding CancelAllJobsCommand}"
+                        Padding="10,5" Margin="0,0,10,0"/>
+                    <Button Content="キューを全削除"
+                        Command="{Binding ClearAllJobsCommand}"
+                        Padding="10,5" Margin="0,0,10,0"/>
+                    <Button Content="完了済みをクリア"
                         Command="{Binding ClearCompletedJobsCommand}"
-                        HorizontalAlignment="Right" Padding="10,5" Margin="0,0,0,10"/>
+                        Padding="10,5"/>
+                </StackPanel>
 
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding DownloadQueue}">
@@ -245,7 +253,7 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="80"/>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="96"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
@@ -270,16 +278,17 @@
                                                      Value="{Binding Progress}" Maximum="100" Height="6"/>
 
                                         <!-- ボタン -->
-                                        <StackPanel Grid.Column="2" Grid.RowSpan="2" Orientation="Horizontal"
-                                                    Width="86" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                        <StackPanel Grid.Column="2" Grid.RowSpan="2"
+                                                Orientation="Vertical" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                Margin="10,0,0,0">
                                             <Button Content="キャンセル"
-                                                    Command="{Binding CancelCommand}"
-                                                    Visibility="{Binding CanCancel, Converter={StaticResource BoolToVis}}"
-                                                    Padding="10,5" Margin="0,0"/>
+                                                Command="{Binding CancelCommand}"
+                                                Visibility="{Binding CanCancel, Converter={StaticResource BoolToVis}}"
+                                                MinWidth="100" Padding="10,5"/>
                                             <Button Content="リトライ"
-                                                    Command="{Binding RetryCommand}"
-                                                    Visibility="{Binding CanRetry, Converter={StaticResource BoolToVis}}"
-                                                    Padding="10,5" Margin="0,0"/>
+                                                Command="{Binding RetryCommand}"
+                                                Visibility="{Binding CanRetry, Converter={StaticResource BoolToVis}}"
+                                                MinWidth="100" Padding="10,5"/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>

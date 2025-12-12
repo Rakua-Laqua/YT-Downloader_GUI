@@ -306,6 +306,30 @@ public partial class DownloadViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private void CancelAllJobs()
+    {
+        _downloadManager.CancelAll();
+    }
+
+    [RelayCommand]
+    private void ClearAllJobs()
+    {
+        var result = MessageBox.Show(
+            "ダウンロードキューをすべて削除します。実行中のダウンロードはキャンセルされます。\nよろしいですか？",
+            "確認",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        DownloadQueue.Clear();
+        _downloadManager.ClearAll();
+    }
+
+    [RelayCommand]
     private void ClearCompletedJobs()
     {
         var completedJobs = DownloadQueue

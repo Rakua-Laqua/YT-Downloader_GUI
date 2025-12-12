@@ -18,8 +18,10 @@ public interface IDownloadManager
     IReadOnlyList<DownloadJob> GetAllJobs();
     void Enqueue(DownloadJob job);
     void Cancel(Guid jobId);
+    void CancelAll();
     void Retry(Guid jobId);
     void ClearCompleted();
+    void ClearAll();
     void SetConcurrency(int max);
 }
 
@@ -150,6 +152,28 @@ public class DownloadManager : IDownloadManager, IDisposable
         }
     }
 
+    public void CancelAll()
+    {
+        lock (_lock)
+        {
+            // 実行中はトークンでキャンセル
+            foreach (var cts in _cancellationTokens.Values)
+            {
+                cts.Cancel();
+            }
+
+            // 未開始（Pending）は即キャンセル扱い
+            foreach (var job in _allJobs)
+            {
+                if (job.Status == DownloadStatus.Pending)
+                {
+                    job.Status = DownloadStatus.Canceled;
+                    JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+                }
+            }
+        }
+    }
+
     public void Retry(Guid jobId)
     {
         lock (_lock)
@@ -171,6 +195,17 @@ public class DownloadManager : IDownloadManager, IDisposable
         lock (_lock)
         {
             _allJobs.RemoveAll(j => j.Status == DownloadStatus.Completed || j.Status == DownloadStatus.Canceled);
+        }
+    }
+
+    public void ClearAll()
+    {
+        // まず全キャンセル
+        CancelAll();
+
+        lock (_lock)
+        {
+            _allJobs.Clear();
         }
     }
 
