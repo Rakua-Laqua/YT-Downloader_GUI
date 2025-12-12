@@ -23,6 +23,7 @@ public partial class DownloadViewModel : ViewModelBase
     private readonly IDownloadManager _downloadManager;
     private readonly ISettingsRepository _settingsRepository;
     private DateTime _lastTaskbarFlashAt = DateTime.MinValue;
+    private bool _hasFlashedForAllCompleted;
 
     public DownloadViewModel(
         IYtDlpClient ytDlpClient,
@@ -360,6 +361,8 @@ public partial class DownloadViewModel : ViewModelBase
 
     private void OnDownloadQueueCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        // 新規追加/全削除などで「全件完了」の条件が変わるので、点滅済みフラグをリセット
+        _hasFlashedForAllCompleted = false;
         UpdateQueueSummary();
     }
 
@@ -387,16 +390,40 @@ public partial class DownloadViewModel : ViewModelBase
             jobVm?.UpdateFromJob();
             UpdateQueueSummary();
 
-            if (e.Job.Status == DownloadStatus.Completed)
-            {
-                // 連続完了で過剰に点滅しないよう軽く間引く
-                if ((DateTime.Now - _lastTaskbarFlashAt).TotalMilliseconds >= 800)
-                {
-                    _lastTaskbarFlashAt = DateTime.Now;
-                    TaskbarFlasher.Flash(Application.Current.MainWindow);
-                }
-            }
+            MaybeFlashWhenAllCompleted();
         });
+    }
+
+    private void MaybeFlashWhenAllCompleted()
+    {
+        if (DownloadQueue.Count == 0)
+        {
+            _hasFlashedForAllCompleted = false;
+            return;
+        }
+
+        // 「全てのダウンロードが完了」= キュー内がすべて Completed
+        var allCompleted = DownloadQueue.All(j => j.Status == DownloadStatus.Completed);
+        if (!allCompleted)
+        {
+            _hasFlashedForAllCompleted = false;
+            return;
+        }
+
+        if (_hasFlashedForAllCompleted)
+        {
+            return;
+        }
+
+        // 連続判定で過剰に点滅しないよう軽く間引く
+        if ((DateTime.Now - _lastTaskbarFlashAt).TotalMilliseconds < 800)
+        {
+            return;
+        }
+
+        _lastTaskbarFlashAt = DateTime.Now;
+        _hasFlashedForAllCompleted = true;
+        TaskbarFlasher.Flash(Application.Current.MainWindow);
     }
 
     #endregion
