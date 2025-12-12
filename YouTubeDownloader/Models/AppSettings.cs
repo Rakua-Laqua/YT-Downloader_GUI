@@ -1,0 +1,36 @@
+using System;
+using System.IO;
+
+namespace YouTubeDownloader.Models;
+
+/// <summary>
+/// アプリケーション設定を表すモデル
+/// </summary>
+public class AppSettings
+{
+    /// <summary>yt-dlp実行ファイルパス</summary>
+    public string YtDlpPath { get; set; } = string.Empty;
+
+    /// <summary>ffmpeg実行ファイルパス</summary>
+    public string FfmpegPath { get; set; } = string.Empty;
+
+    /// <summary>デフォルト保存先フォルダ</summary>
+    public string DefaultSaveFolder { get; set; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+        "YouTubeDownloader");
+
+    /// <summary>デフォルト動画フォーマット</summary>
+    public string DefaultVideoFormat { get; set; } = "mp4";
+
+    /// <summary>デフォルト音声フォーマット</summary>
+    public string DefaultAudioFormat { get; set; } = "mp3";
+
+    /// <summary>デフォルト品質</summary>
+    public string DefaultQuality { get; set; } = "best";
+
+    /// <summary>ファイル名テンプレート</summary>
+    public string FilenameTemplate { get; set; } = "{title}";
+
+    /// <summary>同時ダウンロード数</summary>
+    public int MaxConcurrentDownloads { get; set; } = 2;
+}

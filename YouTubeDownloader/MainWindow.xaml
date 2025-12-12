@@ -1,0 +1,97 @@
+﻿<Window x:Class="YouTubeDownloader.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:YouTubeDownloader.ViewModels"
+        xmlns:views="clr-namespace:YouTubeDownloader.Views"
+        mc:Ignorable="d"
+        Title="YouTube Downloader" 
+        Height="750" Width="1100"
+        MinHeight="600" MinWidth="900"
+        WindowStartupLocation="CenterScreen"
+        Background="#FAFAFA">
+
+    <Window.Resources>
+        <!-- View-ViewModel マッピング -->
+        <DataTemplate DataType="{x:Type vm:DownloadViewModel}">
+            <views:DownloadView/>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:LibraryViewModel}">
+            <views:LibraryView/>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+            <views:SettingsView/>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- ナビゲーションパネル -->
+        <Border Grid.Column="0" Background="#2D2D2D">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- ロゴ・タイトル -->
+                <StackPanel Grid.Row="0" Margin="20,25,20,30">
+                    <TextBlock Text="📺" FontSize="36" HorizontalAlignment="Center"/>
+                    <TextBlock Text="YouTube" FontSize="20" FontWeight="Bold" 
+                               Foreground="White" HorizontalAlignment="Center" Margin="0,10,0,0"/>
+                    <TextBlock Text="Downloader" FontSize="14" 
+                               Foreground="#AAA" HorizontalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- ナビゲーションボタン -->
+                <StackPanel Grid.Row="1" Margin="10,0">
+                    <!-- ダウンロード -->
+                    <RadioButton x:Name="NavDownload"
+                                 Command="{Binding NavigateToDownloadCommand}"
+                                 IsChecked="{Binding SelectedNavigation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Download}"
+                                 GroupName="Navigation"
+                                 Style="{StaticResource NavButtonStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="⬇️" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <TextBlock Text="ダウンロード" FontSize="14" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <!-- ライブラリ -->
+                    <RadioButton x:Name="NavLibrary"
+                                 Command="{Binding NavigateToLibraryAsyncCommand}"
+                                 IsChecked="{Binding SelectedNavigation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Library}"
+                                 GroupName="Navigation"
+                                 Style="{StaticResource NavButtonStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="📚" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <TextBlock Text="ライブラリ" FontSize="14" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <!-- 設定 -->
+                    <RadioButton x:Name="NavSettings"
+                                 Command="{Binding NavigateToSettingsCommand}"
+                                 IsChecked="{Binding SelectedNavigation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Settings}"
+                                 GroupName="Navigation"
+                                 Style="{StaticResource NavButtonStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="⚙️" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <TextBlock Text="設定" FontSize="14" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- メインコンテンツ -->
+        <Border Grid.Column="1" Padding="25">
+            <ContentControl Content="{Binding CurrentView}"/>
+        </Border>
+    </Grid>
+</Window>
