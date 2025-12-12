@@ -8,6 +8,7 @@ using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
+using YouTubeDownloader.Infrastructure;
 using YouTubeDownloader.Models;
 using YouTubeDownloader.Services;
 
@@ -21,6 +22,7 @@ public partial class DownloadViewModel : ViewModelBase
     private readonly IYtDlpClient _ytDlpClient;
     private readonly IDownloadManager _downloadManager;
     private readonly ISettingsRepository _settingsRepository;
+    private DateTime _lastTaskbarFlashAt = DateTime.MinValue;
 
     public DownloadViewModel(
         IYtDlpClient ytDlpClient,
@@ -384,6 +386,16 @@ public partial class DownloadViewModel : ViewModelBase
             var jobVm = DownloadQueue.FirstOrDefault(j => j.Job.Id == e.Job.Id);
             jobVm?.UpdateFromJob();
             UpdateQueueSummary();
+
+            if (e.Job.Status == DownloadStatus.Completed)
+            {
+                // 連続完了で過剰に点滅しないよう軽く間引く
+                if ((DateTime.Now - _lastTaskbarFlashAt).TotalMilliseconds >= 800)
+                {
+                    _lastTaskbarFlashAt = DateTime.Now;
+                    TaskbarFlasher.Flash(Application.Current.MainWindow);
+                }
+            }
         });
     }
 
