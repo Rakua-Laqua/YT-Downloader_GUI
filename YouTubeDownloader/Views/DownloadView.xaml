@@ -245,8 +245,12 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="80"/>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="96"/>
                                         </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
 
                                         <!-- サムネイル -->
                                         <Border Grid.Column="0" CornerRadius="3" ClipToBounds="True"
@@ -254,25 +258,28 @@
                                             <Image Source="{Binding ThumbnailUrl}" Stretch="UniformToFill"/>
                                         </Border>
 
-                                        <!-- 情報と進捗 -->
-                                        <StackPanel Grid.Column="1" Margin="10,0">
+                                        <!-- 情報 -->
+                                        <StackPanel Grid.Column="1" Grid.Row="0" Margin="10,0" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis"/>
                                             <TextBlock Text="{Binding StatusText}" Foreground="Gray" FontSize="12"/>
-                                            <ProgressBar Value="{Binding Progress}" Maximum="100"
-                                                         Height="6" Margin="0,5,0,0"/>
                                         </StackPanel>
 
+                                        <!-- 進捗 -->
+                                        <ProgressBar Grid.Column="1" Grid.Row="1" Margin="10,6,10,0"
+                                                     Value="{Binding Progress}" Maximum="100" Height="6"/>
+
                                         <!-- ボタン -->
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <StackPanel Grid.Column="2" Grid.RowSpan="2" Orientation="Horizontal"
+                                                    Width="86" HorizontalAlignment="Right" VerticalAlignment="Center">
                                             <Button Content="キャンセル"
                                                     Command="{Binding CancelCommand}"
                                                     Visibility="{Binding CanCancel, Converter={StaticResource BoolToVis}}"
-                                                    Padding="10,5" Margin="5,0"/>
+                                                    Padding="10,5" Margin="0,0"/>
                                             <Button Content="リトライ"
                                                     Command="{Binding RetryCommand}"
                                                     Visibility="{Binding CanRetry, Converter={StaticResource BoolToVis}}"
-                                                    Padding="10,5" Margin="5,0"/>
+                                                    Padding="10,5" Margin="0,0"/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
