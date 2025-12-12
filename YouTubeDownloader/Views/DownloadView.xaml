@@ -12,7 +12,8 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
     </UserControl.Resources>
 
-    <Grid>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <Grid Margin="0,0,10,0">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -265,13 +266,11 @@
                                         <!-- ボタン -->
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                             <Button Content="キャンセル"
-                                                    Command="{Binding DataContext.CancelJobCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding}"
+                                                    Command="{Binding CancelCommand}"
                                                     Visibility="{Binding CanCancel, Converter={StaticResource BoolToVis}}"
                                                     Padding="10,5" Margin="5,0"/>
                                             <Button Content="リトライ"
-                                                    Command="{Binding DataContext.RetryJobCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding}"
+                                                    Command="{Binding RetryCommand}"
                                                     Visibility="{Binding CanRetry, Converter={StaticResource BoolToVis}}"
                                                     Padding="10,5" Margin="5,0"/>
                                         </StackPanel>
@@ -292,4 +291,5 @@
             </Grid>
         </Border>
     </Grid>
+    </ScrollViewer>
 </UserControl>

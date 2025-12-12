@@ -42,7 +42,7 @@ public partial class DownloadViewModel : ViewModelBase
         // ダウンロードキューを復元
         foreach (var job in _downloadManager.GetAllJobs())
         {
-            var vm = new DownloadJobViewModel(job);
+            var vm = new DownloadJobViewModel(job, CancelJob, RetryJob);
             vm.UpdateFromJob();
             DownloadQueue.Add(vm);
         }
@@ -231,7 +231,7 @@ public partial class DownloadViewModel : ViewModelBase
                     Quality = SelectedQuality
                 };
 
-                var jobVm = new DownloadJobViewModel(job);
+                var jobVm = new DownloadJobViewModel(job, CancelJob, RetryJob);
                 DownloadQueue.Add(jobVm);
                 _downloadManager.Enqueue(job);
             }
@@ -248,7 +248,7 @@ public partial class DownloadViewModel : ViewModelBase
                 Quality = SelectedQuality
             };
 
-            var jobVm = new DownloadJobViewModel(job);
+            var jobVm = new DownloadJobViewModel(job, CancelJob, RetryJob);
             DownloadQueue.Add(jobVm);
             _downloadManager.Enqueue(job);
         }
@@ -286,6 +286,11 @@ public partial class DownloadViewModel : ViewModelBase
         }
     }
 
+    private void CancelJob(Guid jobId)
+    {
+        _downloadManager.Cancel(jobId);
+    }
+
     [RelayCommand]
     private void RetryJob(DownloadJobViewModel? job)
     {
@@ -293,6 +298,11 @@ public partial class DownloadViewModel : ViewModelBase
         {
             _downloadManager.Retry(job.Job.Id);
         }
+    }
+
+    private void RetryJob(Guid jobId)
+    {
+        _downloadManager.Retry(jobId);
     }
 
     [RelayCommand]

@@ -31,6 +31,8 @@ public class ProgressInfo
 public class YtDlpClient : IYtDlpClient
 {
     private readonly ISettingsRepository _settingsRepository;
+    private static string? _cachedYtDlpPath;
+    private static string? _cachedFfmpegPath;
 
     public YtDlpClient(ISettingsRepository settingsRepository)
     {
@@ -40,11 +42,92 @@ public class YtDlpClient : IYtDlpClient
     private string GetYtDlpPath()
     {
         var settings = _settingsRepository.Load();
-        if (string.IsNullOrEmpty(settings.YtDlpPath) || !File.Exists(settings.YtDlpPath))
+        
+        // 設定で指定されていればそれを使用
+        if (!string.IsNullOrEmpty(settings.YtDlpPath) && File.Exists(settings.YtDlpPath))
         {
-            throw new InvalidOperationException("yt-dlpの実行ファイルパスが設定されていません。設定画面で指定してください。");
+            return settings.YtDlpPath;
         }
-        return settings.YtDlpPath;
+        
+        // キャッシュがあればそれを使用
+        if (!string.IsNullOrEmpty(_cachedYtDlpPath) && File.Exists(_cachedYtDlpPath))
+        {
+            return _cachedYtDlpPath;
+        }
+        
+        // 自動検出
+        _cachedYtDlpPath = FindExecutable("yt-dlp.exe", "yt-dlp");
+        if (!string.IsNullOrEmpty(_cachedYtDlpPath))
+        {
+            return _cachedYtDlpPath;
+        }
+        
+        throw new InvalidOperationException("yt-dlpが見つかりません。yt-dlpをインストールするか、設定画面でパスを指定してください。");
+    }
+
+    public static string? GetFfmpegPath()
+    {
+        // キャッシュがあればそれを使用
+        if (!string.IsNullOrEmpty(_cachedFfmpegPath) && File.Exists(_cachedFfmpegPath))
+        {
+            return _cachedFfmpegPath;
+        }
+        
+        // 自動検出
+        _cachedFfmpegPath = FindExecutable("ffmpeg.exe", "ffmpeg");
+        return _cachedFfmpegPath;
+    }
+
+    private static string? FindExecutable(string windowsName, string unixName)
+    {
+        var exeName = Environment.OSVersion.Platform == PlatformID.Win32NT ? windowsName : unixName;
+        
+        // 1. PATH環境変数から検索
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrEmpty(pathEnv))
+        {
+            foreach (var path in pathEnv.Split(Path.PathSeparator))
+            {
+                var fullPath = Path.Combine(path, exeName);
+                if (File.Exists(fullPath))
+                {
+                    return fullPath;
+                }
+            }
+        }
+        
+        // 2. 一般的なインストール場所を検索 (Windows)
+        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+        {
+            var commonPaths = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WinGet", "Links", exeName),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), exeName.Replace(".exe", ""), exeName),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), exeName.Replace(".exe", ""), exeName),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "scoop", "shims", exeName),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local", "Programs", exeName.Replace(".exe", ""), exeName),
+                Path.Combine("C:\\", exeName.Replace(".exe", ""), exeName),
+                Path.Combine("C:\\tools", exeName),
+            };
+            
+            foreach (var path in commonPaths)
+            {
+                if (File.Exists(path))
+                {
+                    return path;
+                }
+            }
+        }
+        
+        // 3. アプリケーションディレクトリ
+        var appDir = AppDomain.CurrentDomain.BaseDirectory;
+        var appPath = Path.Combine(appDir, exeName);
+        if (File.Exists(appPath))
+        {
+            return appPath;
+        }
+        
+        return null;
     }
 
     public async Task<YtDlpAnalyzeResult> AnalyzeUrlAsync(string url, CancellationToken cancellationToken = default)
@@ -120,14 +203,16 @@ public class YtDlpClient : IYtDlpClient
                 int index = 1;
                 foreach (var entry in entries.EnumerateArray())
                 {
+                    var videoId = GetStringProperty(entry, "id") ?? "";
                     var video = new VideoMetadata
                     {
-                        Id = GetStringProperty(entry, "id") ?? "",
+                        Id = videoId,
                         Title = GetStringProperty(entry, "title") ?? $"動画 {index}",
                         Channel = GetStringProperty(entry, "uploader") ?? GetStringProperty(entry, "channel") ?? playlist.Channel,
                         DurationSeconds = GetIntProperty(entry, "duration"),
                         ThumbnailUrl = GetThumbnailUrl(entry),
-                        Url = GetStringProperty(entry, "url") ?? GetStringProperty(entry, "webpage_url") ?? $"https://www.youtube.com/watch?v={GetStringProperty(entry, "id")}",
+                        // 常にYouTube動画URLを正しく構築
+                        Url = !string.IsNullOrEmpty(videoId) ? $"https://www.youtube.com/watch?v={videoId}" : "",
                         PlaylistId = playlist.Id,
                         PlaylistIndex = index
                     };
@@ -180,14 +265,16 @@ public class YtDlpClient : IYtDlpClient
                     int index = 1;
                     foreach (var entry in entries.EnumerateArray())
                     {
+                        var videoId = GetStringProperty(entry, "id") ?? "";
                         var video = new VideoMetadata
                         {
-                            Id = GetStringProperty(entry, "id") ?? "",
+                            Id = videoId,
                             Title = GetStringProperty(entry, "title") ?? $"動画 {index}",
                             Channel = GetStringProperty(entry, "uploader") ?? GetStringProperty(entry, "channel") ?? playlist.Channel,
                             DurationSeconds = GetIntProperty(entry, "duration"),
                             ThumbnailUrl = GetThumbnailUrl(entry),
-                            Url = GetStringProperty(entry, "url") ?? GetStringProperty(entry, "webpage_url") ?? $"https://www.youtube.com/watch?v={GetStringProperty(entry, "id")}",
+                            // 常にYouTube動画URLを正しく構築
+                            Url = !string.IsNullOrEmpty(videoId) ? $"https://www.youtube.com/watch?v={videoId}" : "",
                             PlaylistId = playlist.Id,
                             PlaylistIndex = index
                         };
@@ -313,6 +400,12 @@ public class YtDlpClient : IYtDlpClient
 
     public async Task DownloadAsync(DownloadJob job, IProgress<ProgressInfo>? progress, CancellationToken cancellationToken = default)
     {
+        // URLが空の場合はエラー
+        if (string.IsNullOrEmpty(job.VideoMetadata.Url))
+        {
+            throw new Exception("動画URLが指定されていません");
+        }
+
         var ytDlpPath = GetYtDlpPath();
         var settings = _settingsRepository.Load();
 
@@ -332,29 +425,38 @@ public class YtDlpClient : IYtDlpClient
         // フォーマット指定
         if (job.Format == "mp3" || job.Format == "m4a" || job.Format == "wav")
         {
-            // 音声のみ
+            // 音声のみ - bestaudioを取得して変換
+            args.Append("-f \"bestaudio/best\" ");
             args.Append("-x ");
             args.Append($"--audio-format {job.Format} ");
             args.Append("--audio-quality 0 ");
         }
         else
         {
-            // 動画
+            // 動画 - より柔軟なフォーマット指定（フォールバック付き）
             if (job.Quality == "best")
             {
-                args.Append("-f \"bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best\" ");
+                args.Append("-f \"bv*+ba/b\" ");
             }
             else if (job.Quality == "1080p")
             {
-                args.Append("-f \"bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best\" ");
+                args.Append("-f \"bv*[height<=1080]+ba/b[height<=1080]/b\" ");
             }
             else if (job.Quality == "720p")
             {
-                args.Append("-f \"bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best\" ");
+                args.Append("-f \"bv*[height<=720]+ba/b[height<=720]/b\" ");
+            }
+            else if (job.Quality == "480p")
+            {
+                args.Append("-f \"bv*[height<=480]+ba/b[height<=480]/b\" ");
+            }
+            else if (job.Quality == "360p")
+            {
+                args.Append("-f \"bv*[height<=360]+ba/b[height<=360]/b\" ");
             }
             else
             {
-                args.Append("-f \"bestvideo+bestaudio/best\" ");
+                args.Append("-f \"bv*+ba/b\" ");
             }
             args.Append("--merge-output-format mp4 ");
         }
@@ -368,12 +470,20 @@ public class YtDlpClient : IYtDlpClient
             args.Append("--embed-thumbnail ");
         }
 
-        // ffmpegパスが設定されていれば指定
-        if (!string.IsNullOrEmpty(settings.FfmpegPath) && File.Exists(settings.FfmpegPath))
+        // ffmpegパスを自動検出または設定から取得
+        var ffmpegPath = !string.IsNullOrEmpty(settings.FfmpegPath) && File.Exists(settings.FfmpegPath) 
+            ? settings.FfmpegPath 
+            : GetFfmpegPath();
+        
+        if (!string.IsNullOrEmpty(ffmpegPath))
         {
-            var ffmpegDir = Path.GetDirectoryName(settings.FfmpegPath);
+            var ffmpegDir = Path.GetDirectoryName(ffmpegPath);
             args.Append($"--ffmpeg-location \"{ffmpegDir}\" ");
         }
+
+        // YouTube対策: User-Agent は指定するが、player_client=web の強制は
+        // SABR でURLが欠落し「Requested format is not available」になり得るため行わない。
+        args.Append("--user-agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" ");
 
         // 進捗表示用
         args.Append("--newline ");
@@ -390,8 +500,11 @@ public class YtDlpClient : IYtDlpClient
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
         };
+
+        System.Diagnostics.Debug.WriteLine($"yt-dlp: {ytDlpPath} {args}");
 
         using var process = new Process { StartInfo = psi };
         process.Start();
@@ -431,7 +544,73 @@ public class YtDlpClient : IYtDlpClient
 
         if (process.ExitCode != 0)
         {
-            throw new Exception($"ダウンロードに失敗しました: {errorOutput}");
+            var stderr = errorOutput.ToString();
+
+            // 403系は android client で再試行（web強制より成功率が高い）
+            if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
+                stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
+            {
+                var retryArgs = new StringBuilder(args.ToString());
+                retryArgs.Append(" --extractor-args \"youtube:player_client=android\"");
+
+                var retryPsi = new ProcessStartInfo
+                {
+                    FileName = ytDlpPath,
+                    Arguments = retryArgs.ToString(),
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
+                };
+
+                System.Diagnostics.Debug.WriteLine($"yt-dlp retry(android): {ytDlpPath} {retryArgs}");
+
+                using var retryProcess = new Process { StartInfo = retryPsi };
+                retryProcess.Start();
+
+                var retryOutputTask = Task.Run(async () =>
+                {
+                    while (!retryProcess.StandardOutput.EndOfStream)
+                    {
+                        var line = await retryProcess.StandardOutput.ReadLineAsync();
+                        if (line != null && progress != null)
+                        {
+                            var progressInfo = ParseProgressLine(line);
+                            if (progressInfo != null)
+                            {
+                                progress.Report(progressInfo);
+                            }
+                        }
+                    }
+                }, cancellationToken);
+
+                var retryErrorOutput = new StringBuilder();
+                var retryErrorTask = Task.Run(async () =>
+                {
+                    while (!retryProcess.StandardError.EndOfStream)
+                    {
+                        var line = await retryProcess.StandardError.ReadLineAsync();
+                        if (line != null)
+                        {
+                            retryErrorOutput.AppendLine(line);
+                        }
+                    }
+                }, cancellationToken);
+
+                await Task.WhenAll(retryOutputTask, retryErrorTask);
+                await retryProcess.WaitForExitAsync(cancellationToken);
+
+                if (retryProcess.ExitCode != 0)
+                {
+                    throw new Exception($"ダウンロードに失敗しました: {retryErrorOutput}");
+                }
+            }
+            else
+            {
+                throw new Exception($"ダウンロードに失敗しました: {stderr}");
+            }
         }
 
         // ダウンロードしたファイルのパスを更新
