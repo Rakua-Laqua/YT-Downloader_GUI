@@ -58,38 +58,6 @@ dotnet build
 dotnet run --project YouTubeDownloader
 ```
 
-## 配布（publish）
-
-配布用には `dotnet publish` を使って「実行に必要なファイル一式」を出力します。
-
-### おすすめ（自己完結 / .NET不要）
-
-配布先PCに .NET のインストールが不要な方式です（ファイルサイズは大きめ）。
-
-```powershell
-./publish.ps1 -Runtime win-x64
-```
-
-※ 環境によっては PowerShell の実行ポリシーで `publish.ps1` が実行できない場合があります。
-その場合は、同等のコマンドを直接実行してください。
-
-```powershell
-dotnet publish "YouTubeDownloader/YouTubeDownloader.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "artifacts/publish/win-x64/self-contained"
-```
-
-生成物:
-
-- `artifacts/publish/win-x64/self-contained/YouTubeDownloader.exe`
-- `artifacts/dist/YouTubeDownloader_win-x64_self-contained_*.zip`
-
-### 軽量（Framework Dependent / .NETが必要）
-
-配布先PCに **.NET 8 Desktop Runtime** が必要ですが、配布物が軽くなります。
-
-```powershell
-./publish.ps1 -Runtime win-x64 -FrameworkDependent
-```
-
 ### yt-dlp / ffmpeg の同梱について
 
 このアプリは `yt-dlp.exe` と `ffmpeg.exe` を以下の順で探します。
