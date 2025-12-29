@@ -60,46 +60,91 @@ dotnet run --project YouTubeDownloader
 
 ## 配布（publish）
 
-配布用には `dotnet publish` を使って「実行に必要なファイル一式」を出力します。
+配布用には `publish.ps1` を使います。用途に応じて3つのビルドパターンがあります。
 
-### おすすめ（自己完結 / .NET不要）
+| パターン | サイズ | .NET必要 | yt-dlp/ffmpeg |
+|----------|--------|----------|---------------|
+| ① 軽量版 | ~3MB | 要 | 別途用意 |
+| ② 自己完結版 | ~150MB | 不要 | 別途用意 |
+| ③ フル同梱版 | ~200MB | 不要 | 同梱 |
 
-配布先PCに .NET のインストールが不要な方式です（ファイルサイズは大きめ）。
+---
 
-```powershell
-./publish.ps1 -Runtime win-x64
-```
+### ① 軽量版（本体のみ / Framework Dependent）
 
-※ 環境によっては PowerShell の実行ポリシーで `publish.ps1` が実行できない場合があります。
-その場合は、同等のコマンドを直接実行してください。
-
-```powershell
-dotnet publish "YouTubeDownloader/YouTubeDownloader.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "artifacts/publish/win-x64/self-contained"
-```
-
-生成物:
-
-- `artifacts/publish/win-x64/self-contained/YouTubeDownloader.exe`
-- `artifacts/dist/YouTubeDownloader_win-x64_self-contained_*.zip`
-
-### 軽量（Framework Dependent / .NETが必要）
-
-配布先PCに **.NET 8 Desktop Runtime** が必要ですが、配布物が軽くなります。
+配布先PCに [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) が必要ですが、配布物が軽くなります。
 
 ```powershell
-./publish.ps1 -Runtime win-x64 -FrameworkDependent
+./publish.ps1 -Zip -Clean
 ```
 
-### yt-dlp / ffmpeg の同梱について
+出力:
+- `artifacts/publish/win-x64/framework-dependent/`
+- `artifacts/dist/win-x64/YouTubeDownloader-vXXX-win-x64-framework-dependent.zip`
+
+---
+
+### ② 自己完結版（.NET同梱 / Self-Contained）
+
+配布先PCに .NET のインストールが不要です（.NETランタイムを同梱）。
+
+```powershell
+./publish.ps1 -Mode self-contained -Zip -Clean
+```
+
+出力:
+- `artifacts/publish/win-x64/self-contained/`
+- `artifacts/dist/win-x64/YouTubeDownloader-vXXX-win-x64-self-contained.zip`
+
+---
+
+### ③ フル同梱版（.NET + yt-dlp + ffmpeg）
+
+すべて同梱した配布パッケージを作成します。  
+`-IncludeTools` を付けると出力フォルダ名に `-with-tools` が付きます。  
+**yt-dlp.exe / ffmpeg.exe は手動で出力フォルダに配置してから ZIP 化してください。**
+
+```powershell
+# 1. まず self-contained でビルド
+./publish.ps1 -Mode self-contained -IncludeTools -Clean
+
+# 2. 出力フォルダにツールを手動配置
+#    artifacts/publish/win-x64/self-contained-with-tools/ に
+#    yt-dlp.exe, ffmpeg.exe, ffprobe.exe をコピー
+
+# 3. ZIP化
+./publish.ps1 -Mode self-contained -IncludeTools -Zip
+```
+
+出力:
+- `artifacts/publish/win-x64/self-contained-with-tools/`
+- `artifacts/dist/win-x64/YouTubeDownloader-vXXX-win-x64-self-contained-with-tools.zip`
+
+---
+
+### publish.ps1 パラメータ一覧
+
+| パラメータ | 値 | 説明 |
+|-----------|-----|------|
+| `-Configuration` | `Release` / `Debug` | ビルド構成（デフォルト: Release） |
+| `-Runtime` | `win-x64` / `win-x86` / `win-arm64` | ターゲット（デフォルト: win-x64） |
+| `-Mode` | `framework-dependent` / `self-contained` / `both` | ビルドモード（デフォルト: framework-dependent） |
+| `-IncludeTools` | スイッチ | 出力名に `-with-tools` を付加 |
+| `-Clean` | スイッチ | ビルド前に出力フォルダを削除 |
+| `-Zip` | スイッチ | ZIP ファイルを作成 |
+
+---
+
+### yt-dlp / ffmpeg の探索順序
 
 このアプリは `yt-dlp.exe` と `ffmpeg.exe` を以下の順で探します。
 
-1. 設定で指定したパス
-2. PATH
+1. 設定画面で指定したパス
+2. 環境変数 PATH
 3. 一般的なインストール場所
-4. アプリと同じフォルダ
+4. アプリと同じフォルダ（同梱版向け）
 
-今回の配布方針は **同梱しない** ため、利用者が各自で `yt-dlp` / `ffmpeg` をインストールし、
+軽量版・自己完結版を使う場合は、利用者が各自で `yt-dlp` / `ffmpeg` をインストールし、
 PATH を通すか設定画面でパスを指定してください。
 
 ## 技術スタック
