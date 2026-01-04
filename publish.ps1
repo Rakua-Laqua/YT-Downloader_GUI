@@ -1,58 +1,144 @@
+[CmdletBinding()]
 param(
+    [ValidateSet('Release', 'Debug')]
+    [string]$Configuration = 'Release',
+
     [ValidateSet('win-x64', 'win-x86', 'win-arm64')]
     [string]$Runtime = 'win-x64',
 
-    # If specified, publish as framework-dependent (requires .NET Desktop Runtime on target PC)
-    [switch]$FrameworkDependent,
+    [ValidateSet('self-contained', 'framework-dependent', 'both')]
+    [string]$Mode = 'framework-dependent',
 
-    # Skip ZIP creation
-    [switch]$NoZip
+    # 出力フォルダ名・ZIP名に "-with-tools" を付ける（手動でツールを配置する想定）
+    [switch]$IncludeTools,
+
+    # 成果物フォルダを事前に掃除する
+    [switch]$Clean,
+
+    # publish 出力を zip 化する（配布用）
+    [switch]$Zip
 )
 
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = $PSScriptRoot
-$projectPath = Join-Path $repoRoot 'YouTubeDownloader\YouTubeDownloader.csproj'
+$RepoRoot = $PSScriptRoot
+$ProjectPath = Join-Path $RepoRoot 'YouTubeDownloader\YouTubeDownloader.csproj'
 
-$mode = if ($FrameworkDependent) { 'framework-dependent' } else { 'self-contained' }
-$outputDir = Join-Path $repoRoot ("artifacts\publish\$Runtime\$mode")
-
-Write-Host "Publishing: runtime=$Runtime, mode=$mode" -ForegroundColor Cyan
-
-New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-
-$publishArgs = @(
-    'publish',
-    $projectPath,
-    '-c', 'Release',
-    '-r', $Runtime,
-    '-o', $outputDir,
-    '-p:PublishSingleFile=true',
-    '-p:IncludeNativeLibrariesForSelfExtract=true'
-)
-
-if ($FrameworkDependent) {
-    $publishArgs += @('--self-contained', 'false')
-} else {
-    $publishArgs += @('--self-contained', 'true')
+if (!(Test-Path $ProjectPath)) {
+    throw "Project not found: $ProjectPath"
 }
 
-dotnet @publishArgs
+# バージョン取得
+function Get-AppVersion {
+    param([Parameter(Mandatory = $true)][string]$CsprojPath)
+    try {
+        [xml]$xml = Get-Content -LiteralPath $CsprojPath -Raw
+        $v = $xml.Project.PropertyGroup.Version | Select-Object -First 1
+        if (![string]::IsNullOrWhiteSpace($v)) { return $v.Trim() }
+    }
+    catch { }
+    try {
+        $git = Get-Command git -ErrorAction Stop
+        $hash = (& $git.Source -C $RepoRoot rev-parse --short HEAD) 2>$null
+        if (![string]::IsNullOrWhiteSpace($hash)) { return $hash.Trim() }
+    }
+    catch { }
+    return ""
+}
 
-Write-Host "Output: $outputDir" -ForegroundColor Green
+# 実行中プロセスを確認して終了を促す
+function Stop-RunningApp {
+    param([string]$ExePath)
+    if (!(Test-Path $ExePath)) { return $true }
 
-if (-not $NoZip) {
-    $distDir = Join-Path $repoRoot 'artifacts\dist'
-    New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+    $exeName = [System.IO.Path]::GetFileNameWithoutExtension($ExePath)
+    $procs = Get-Process -Name $exeName -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -eq $ExePath
+    }
+    if ($procs) {
+        Write-Host "WARNING: $exeName is running. Attempting to stop..." -ForegroundColor Yellow
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+    return $true
+}
 
-    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $zipName = "YouTubeDownloader_${Runtime}_${mode}_${timestamp}.zip"
-    $zipPath = Join-Path $distDir $zipName
+$AppName = "YouTubeDownloader"
+$AppVersion = Get-AppVersion -CsprojPath $ProjectPath
+$DistDir = Join-Path $RepoRoot ("artifacts\dist\$Runtime")
 
-    if (Test-Path $zipPath) {
-        Remove-Item -Force $zipPath
+function Publish-One {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('self-contained', 'framework-dependent')]
+        [string]$OneMode
+    )
+
+    $toolsSuffix = if ($IncludeTools) { '-with-tools' } else { '' }
+    $OutDir = Join-Path $RepoRoot ("artifacts\publish\$Runtime\$OneMode$toolsSuffix")
+    $exePath = Join-Path $OutDir "$AppName.exe"
+
+    # 実行中のアプリを停止
+    Stop-RunningApp -ExePath $exePath
+
+    if ($Clean -and (Test-Path $OutDir)) {
+        Remove-Item $OutDir -Recurse -Force
     }
 
-    Compress-Archive -Path (Join-Path $outputDir '*') -DestinationPath $zipPath -Force
-    Write-Host "ZIP: $zipPath" -ForegroundColor Green
+    New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+    Write-Host "`nPublishing..." -ForegroundColor Cyan
+    Write-Host "  Configuration: $Configuration"
+    Write-Host "  Runtime      : $Runtime"
+    Write-Host "  Mode         : $OneMode"
+    Write-Host "  WithTools    : $IncludeTools"
+    Write-Host "  Output       : $OutDir"
+
+    if ($OneMode -eq 'self-contained') {
+        dotnet publish $ProjectPath `
+            -c $Configuration `
+            -r $Runtime `
+            --self-contained true `
+            -o $OutDir `
+            /p:PublishSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true
+    }
+    else {
+        dotnet publish $ProjectPath `
+            -c $Configuration `
+            -r $Runtime `
+            --self-contained false `
+            -o $OutDir
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet publish failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host "Done: $OutDir" -ForegroundColor Green
+
+    if ($Zip) {
+        # ビルド直後のファイルロック解除を待つ
+        Start-Sleep -Seconds 2
+
+        New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+
+        $verPart = if (![string]::IsNullOrWhiteSpace($AppVersion)) { "-v$AppVersion" } else { '' }
+        $zipName = "$AppName$verPart-$Runtime-$OneMode$toolsSuffix.zip"
+        $zipPath = Join-Path $DistDir $zipName
+
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+
+        Write-Host "Zipping -> $zipPath" -ForegroundColor Cyan
+        Compress-Archive -Path (Join-Path $OutDir '*') -DestinationPath $zipPath -Force
+        Write-Host "Zip done." -ForegroundColor Green
+    }
+}
+
+if ($Mode -eq 'both') {
+    Publish-One -OneMode 'self-contained'
+    Publish-One -OneMode 'framework-dependent'
+}
+else {
+    Publish-One -OneMode $Mode
 }
