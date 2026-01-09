@@ -58,9 +58,7 @@ dotnet build
 dotnet run --project YouTubeDownloader
 ```
 
-<<<<<<< HEAD
 ### yt-dlp / ffmpeg の同梱について
-=======
 ## 配布（publish）
 
 配布用には `publish.ps1` を使います。用途に応じて3つのビルドパターンがあります。
@@ -139,7 +137,6 @@ dotnet run --project YouTubeDownloader
 ---
 
 ### yt-dlp / ffmpeg の探索順序
->>>>>>> b34eaf3dd2b462b77f070e728f1255ce3fc43b29
 
 このアプリは `yt-dlp.exe` と `ffmpeg.exe` を以下の順で探します。
 
