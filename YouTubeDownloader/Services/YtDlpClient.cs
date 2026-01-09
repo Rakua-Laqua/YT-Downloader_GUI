@@ -34,6 +34,8 @@ public class YtDlpClient : IYtDlpClient
     private static string? _cachedYtDlpPath;
     private static string? _cachedFfmpegPath;
 
+    private const string AcceptLanguageHeaderJaJp = "Accept-Language:ja-JP,ja;q=0.9";
+
     public YtDlpClient(ISettingsRepository settingsRepository)
     {
         _settingsRepository = settingsRepository;
@@ -136,13 +138,16 @@ public class YtDlpClient : IYtDlpClient
         {
             var ytDlpPath = GetYtDlpPath();
 
+            // タイトル等のローカライズを日本語優先にする（YouTube側に日本語タイトルが存在する場合に反映される）
+            var localizationArgs = BuildLocalizationArgs();
+
             // URLの種類を判定してから適切な方法で解析
             bool isPlaylistUrl = url.Contains("list=") || url.Contains("/playlist");
 
             if (isPlaylistUrl)
             {
                 // プレイリストURL: --flat-playlistで高速に一覧取得
-                var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"--dump-single-json --flat-playlist \"{url}\"", cancellationToken);
+                var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"{localizationArgs} --dump-single-json --flat-playlist \"{url}\"", cancellationToken);
                 if (!string.IsNullOrEmpty(playlistInfoResult))
                 {
                     return ParsePlaylistFromJson(playlistInfoResult);
@@ -150,7 +155,7 @@ public class YtDlpClient : IYtDlpClient
             }
 
             // 単一動画として解析（1回の呼び出しのみ）
-            var videoResult = await RunYtDlpAsync(ytDlpPath, $"--dump-json --no-playlist \"{url}\"", cancellationToken);
+            var videoResult = await RunYtDlpAsync(ytDlpPath, $"{localizationArgs} --dump-json --no-playlist \"{url}\"", cancellationToken);
             if (!string.IsNullOrEmpty(videoResult))
             {
                 var video = ParseVideoMetadata(videoResult, url);
@@ -246,8 +251,10 @@ public class YtDlpClient : IYtDlpClient
         var playlist = new PlaylistMetadata();
         var videos = new List<VideoMetadata>();
 
+        var localizationArgs = BuildLocalizationArgs();
+
         // プレイリスト情報を取得
-        var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"--dump-single-json --flat-playlist \"{url}\"", cancellationToken);
+        var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"{localizationArgs} --dump-single-json --flat-playlist \"{url}\"", cancellationToken);
         if (!string.IsNullOrEmpty(playlistInfoResult))
         {
             try
@@ -419,6 +426,12 @@ public class YtDlpClient : IYtDlpClient
         // コマンド引数を構築
         var args = new StringBuilder();
 
+        // タイトル等のローカライズを日本語優先にする（YouTube側に日本語タイトルが存在する場合に反映される）
+        // 403 リトライ時に置換できるよう、文字列として保持しておく
+        var youtubeExtractorArgs = BuildYoutubeExtractorArgs();
+        args.Append($"{youtubeExtractorArgs} ");
+        args.Append($"--add-header \"{AcceptLanguageHeaderJaJp}\" ");
+
         // 出力テンプレート
         args.Append($"-o \"{outputPath}\" ");
 
@@ -550,8 +563,18 @@ public class YtDlpClient : IYtDlpClient
             if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
                 stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
             {
-                var retryArgs = new StringBuilder(args.ToString());
-                retryArgs.Append(" --extractor-args \"youtube:player_client=android\"");
+                var retryArgsString = args.ToString();
+                var youtubeExtractorArgsAndroid = BuildYoutubeExtractorArgs("android");
+                if (retryArgsString.Contains(youtubeExtractorArgs, StringComparison.Ordinal))
+                {
+                    retryArgsString = retryArgsString.Replace(youtubeExtractorArgs, youtubeExtractorArgsAndroid, StringComparison.Ordinal);
+                }
+                else
+                {
+                    retryArgsString = $"{youtubeExtractorArgsAndroid} {retryArgsString}";
+                }
+
+                var retryArgs = new StringBuilder(retryArgsString);
 
                 var retryPsi = new ProcessStartInfo
                 {
@@ -727,5 +750,19 @@ public class YtDlpClient : IYtDlpClient
         await process.WaitForExitAsync(cancellationToken);
 
         return output;
+    }
+
+    private static string BuildLocalizationArgs()
+        => $"{BuildYoutubeExtractorArgs()} --add-header \"{AcceptLanguageHeaderJaJp}\"";
+
+    private static string BuildYoutubeExtractorArgs(string? playerClient = null)
+    {
+        var sb = new StringBuilder("--extractor-args \"youtube:lang=ja");
+        if (!string.IsNullOrWhiteSpace(playerClient))
+        {
+            sb.Append($";player_client={playerClient}");
+        }
+        sb.Append("\"");
+        return sb.ToString();
     }
 }
