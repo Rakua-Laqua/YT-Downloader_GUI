@@ -259,8 +259,10 @@ public class YtDlpClient : IYtDlpClient
         var playlist = new PlaylistMetadata();
         var videos = new List<VideoMetadata>();
 
+        var localizationArgs = BuildLocalizationArgs();
+
         // プレイリスト情報を取得
-        var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"--dump-single-json --flat-playlist \"{url}\"", cancellationToken);
+        var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"{localizationArgs} --dump-single-json --flat-playlist \"{url}\"", cancellationToken);
         if (!string.IsNullOrEmpty(playlistInfoResult))
         {
             try
@@ -467,6 +469,12 @@ public class YtDlpClient : IYtDlpClient
         // コマンド引数を構築
         var args = new StringBuilder();
 
+        // タイトル等のローカライズを日本語優先にする（YouTube側に日本語タイトルが存在する場合に反映される）
+        // 403 リトライ時に置換できるよう、文字列として保持しておく
+        var youtubeExtractorArgs = BuildYoutubeExtractorArgs();
+        args.Append($"{youtubeExtractorArgs} ");
+        args.Append($"--add-header \"{AcceptLanguageHeaderJaJp}\" ");
+
         // 出力テンプレート
         args.Append($"-o \"{outputPath}\" ");
         args.Append("--force-overwrites ");
@@ -572,9 +580,9 @@ public class YtDlpClient : IYtDlpClient
         {
             var stderr = errorOutput.ToString();
 
-            // 403系は android client で再試行。ただし動画の高画質指定では android 側が
-            // 360p単体mp4だけを返すことがあるため、品質を下げて成功扱いにはしない。
-            if (IsHttpForbidden(stderr) && CanRetryWithAndroidWithoutQualityDowngrade(job, requestedFormat))
+            // 403系は android client で再試行（web強制より成功率が高い）
+            if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
+                stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
             {
                 var retryArgs = new StringBuilder(args.ToString());
                 retryArgs.Append(" --extractor-args \"youtube:player_client=android\"");
@@ -936,5 +944,19 @@ public class YtDlpClient : IYtDlpClient
         await process.WaitForExitAsync(cancellationToken);
 
         return output;
+    }
+
+    private static string BuildLocalizationArgs()
+        => $"{BuildYoutubeExtractorArgs()} --add-header \"{AcceptLanguageHeaderJaJp}\"";
+
+    private static string BuildYoutubeExtractorArgs(string? playerClient = null)
+    {
+        var sb = new StringBuilder("--extractor-args \"youtube:lang=ja");
+        if (!string.IsNullOrWhiteSpace(playerClient))
+        {
+            sb.Append($";player_client={playerClient}");
+        }
+        sb.Append("\"");
+        return sb.ToString();
     }
 }
