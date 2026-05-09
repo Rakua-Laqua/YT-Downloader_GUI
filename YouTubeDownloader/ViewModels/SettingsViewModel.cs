@@ -15,11 +15,13 @@ namespace YouTubeDownloader.ViewModels;
 public partial class SettingsViewModel : ViewModelBase
 {
     private readonly ISettingsRepository _settingsRepository;
+    private readonly IYtDlpClient _ytDlpClient;
     private AppSettings _settings = null!;
 
-    public SettingsViewModel(ISettingsRepository settingsRepository)
+    public SettingsViewModel(ISettingsRepository settingsRepository, IYtDlpClient ytDlpClient)
     {
         _settingsRepository = settingsRepository;
+        _ytDlpClient = ytDlpClient;
         LoadSettings();
     }
 
@@ -30,6 +32,13 @@ public partial class SettingsViewModel : ViewModelBase
 
     [ObservableProperty]
     private string _ffmpegPath = string.Empty;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(UpdateYtDlpCommand))]
+    private bool _autoUpdateYtDlp = true;
+
+    [ObservableProperty]
+    private string _defaultMetadataLanguage = "ja";
 
     [ObservableProperty]
     private string _defaultSaveFolder = string.Empty;
@@ -50,6 +59,7 @@ public partial class SettingsViewModel : ViewModelBase
     private string _filenamePreview = string.Empty;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(UpdateYtDlpCommand))]
     private bool _isYtDlpValid;
 
     [ObservableProperty]
@@ -61,9 +71,17 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private string _ffmpegAutoDetected = string.Empty;
 
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(UpdateYtDlpCommand))]
+    private bool _isUpdatingYtDlp;
+
+    [ObservableProperty]
+    private string _ytDlpUpdateStatus = string.Empty;
+
     public string[] VideoFormats { get; } = { "mp4", "mkv", "webm" };
     public string[] AudioFormats { get; } = { "mp3", "m4a", "wav" };
     public string[] Qualities { get; } = { "best", "1080p", "720p", "480p", "360p" };
+    public string[] MetadataLanguages { get; } = { "ja", "en", "default", "ko", "zh-Hans", "zh-Hant", "es", "fr", "de" };
 
     #endregion
 
@@ -123,6 +141,10 @@ public partial class SettingsViewModel : ViewModelBase
     {
         _settings.YtDlpPath = YtDlpPath;
         _settings.FfmpegPath = FfmpegPath;
+        _settings.AutoUpdateYtDlp = AutoUpdateYtDlp;
+        _settings.DefaultMetadataLanguage = string.IsNullOrWhiteSpace(DefaultMetadataLanguage)
+            ? "ja"
+            : DefaultMetadataLanguage.Trim();
         _settings.DefaultSaveFolder = DefaultSaveFolder;
         _settings.DefaultVideoFormat = DefaultVideoFormat;
         _settings.DefaultAudioFormat = DefaultAudioFormat;
@@ -134,6 +156,38 @@ public partial class SettingsViewModel : ViewModelBase
         MessageBox.Show("設定を保存しました。", "保存完了", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
+    [RelayCommand(CanExecute = nameof(CanUpdateYtDlp))]
+    private async Task UpdateYtDlpAsync()
+    {
+        IsUpdatingYtDlp = true;
+        YtDlpUpdateStatus = "yt-dlpを更新しています...";
+
+        try
+        {
+            var result = await _ytDlpClient.UpdateYtDlpAsync();
+            YtDlpUpdateStatus = result.Message;
+            ValidatePaths();
+
+            if (!result.IsSuccess)
+            {
+                MessageBox.Show(
+                    string.IsNullOrWhiteSpace(result.Output) ? result.Message : result.Output,
+                    "yt-dlp更新エラー",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+        catch (System.Exception ex)
+        {
+            YtDlpUpdateStatus = "yt-dlpの更新に失敗しました。";
+            MessageBox.Show($"yt-dlpの更新に失敗しました: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsUpdatingYtDlp = false;
+        }
+    }
+
     #endregion
 
     private void LoadSettings()
@@ -142,6 +196,10 @@ public partial class SettingsViewModel : ViewModelBase
 
         YtDlpPath = _settings.YtDlpPath;
         FfmpegPath = _settings.FfmpegPath;
+        AutoUpdateYtDlp = _settings.AutoUpdateYtDlp;
+        DefaultMetadataLanguage = string.IsNullOrWhiteSpace(_settings.DefaultMetadataLanguage)
+            ? "ja"
+            : _settings.DefaultMetadataLanguage;
         DefaultSaveFolder = _settings.DefaultSaveFolder;
         DefaultVideoFormat = _settings.DefaultVideoFormat;
         DefaultAudioFormat = _settings.DefaultAudioFormat;
@@ -149,6 +207,7 @@ public partial class SettingsViewModel : ViewModelBase
         FilenameTemplate = _settings.FilenameTemplate;
 
         ValidatePaths();
+        YtDlpUpdateStatus = AutoUpdateYtDlp ? "初回利用前に自動更新します。" : "自動更新は無効です。";
         UpdateFilenamePreview();
     }
 
@@ -196,6 +255,11 @@ public partial class SettingsViewModel : ViewModelBase
         }
     }
 
+    private bool CanUpdateYtDlp()
+    {
+        return !IsUpdatingYtDlp && IsYtDlpValid;
+    }
+
     private static string? FindExecutableInPath(string exeName)
     {
         // PATH環境変数から検索
@@ -235,6 +299,11 @@ public partial class SettingsViewModel : ViewModelBase
     partial void OnFilenameTemplateChanged(string value)
     {
         UpdateFilenamePreview();
+    }
+
+    partial void OnAutoUpdateYtDlpChanged(bool value)
+    {
+        YtDlpUpdateStatus = value ? "初回利用前に自動更新します。" : "自動更新は無効です。";
     }
 
     private void UpdateFilenamePreview()

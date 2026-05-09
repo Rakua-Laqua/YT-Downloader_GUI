@@ -17,7 +17,15 @@ namespace YouTubeDownloader.Services;
 public interface IYtDlpClient
 {
     Task<YtDlpAnalyzeResult> AnalyzeUrlAsync(string url, CancellationToken cancellationToken = default);
+    Task<YtDlpUpdateResult> UpdateYtDlpAsync(CancellationToken cancellationToken = default);
     Task DownloadAsync(DownloadJob job, IProgress<ProgressInfo>? progress, CancellationToken cancellationToken = default);
+}
+
+public class YtDlpUpdateResult
+{
+    public bool IsSuccess { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public string Output { get; set; } = string.Empty;
 }
 
 public class ProgressInfo
@@ -33,6 +41,8 @@ public class YtDlpClient : IYtDlpClient
     private readonly ISettingsRepository _settingsRepository;
     private static string? _cachedYtDlpPath;
     private static string? _cachedFfmpegPath;
+    private readonly SemaphoreSlim _ytDlpUpdateLock = new(1, 1);
+    private bool _hasCheckedYtDlpUpdate;
 
     public YtDlpClient(ISettingsRepository settingsRepository)
     {
@@ -135,6 +145,9 @@ public class YtDlpClient : IYtDlpClient
         try
         {
             var ytDlpPath = GetYtDlpPath();
+            await EnsureYtDlpUpdatedAsync(ytDlpPath, cancellationToken);
+            var settings = _settingsRepository.Load();
+            var metadataLanguageArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage);
 
             // URLの種類を判定してから適切な方法で解析
             bool isPlaylistUrl = url.Contains("list=") || url.Contains("/playlist");
@@ -142,7 +155,7 @@ public class YtDlpClient : IYtDlpClient
             if (isPlaylistUrl)
             {
                 // プレイリストURL: --flat-playlistで高速に一覧取得
-                var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"--dump-single-json --flat-playlist \"{url}\"", cancellationToken);
+                var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"{metadataLanguageArgs}--dump-single-json --flat-playlist \"{url}\"", cancellationToken);
                 if (!string.IsNullOrEmpty(playlistInfoResult))
                 {
                     return ParsePlaylistFromJson(playlistInfoResult);
@@ -150,7 +163,7 @@ public class YtDlpClient : IYtDlpClient
             }
 
             // 単一動画として解析（1回の呼び出しのみ）
-            var videoResult = await RunYtDlpAsync(ytDlpPath, $"--dump-json --no-playlist \"{url}\"", cancellationToken);
+            var videoResult = await RunYtDlpAsync(ytDlpPath, $"{metadataLanguageArgs}--dump-json --no-playlist \"{url}\"", cancellationToken);
             if (!string.IsNullOrEmpty(videoResult))
             {
                 var video = ParseVideoMetadata(videoResult, url);
@@ -398,6 +411,38 @@ public class YtDlpClient : IYtDlpClient
         return "";
     }
 
+    private static string BuildMetadataLanguageArguments(string? language)
+    {
+        var normalized = NormalizeMetadataLanguage(language);
+        return string.IsNullOrEmpty(normalized)
+            ? string.Empty
+            : $"--extractor-args \"youtube:lang={normalized}\" ";
+    }
+
+    private static string NormalizeMetadataLanguage(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+        {
+            return "ja";
+        }
+
+        var trimmed = language.Trim();
+        if (trimmed.Equals("default", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        foreach (var c in trimmed)
+        {
+            if (!char.IsLetterOrDigit(c) && c != '-' && c != '_')
+            {
+                return "ja";
+            }
+        }
+
+        return trimmed;
+    }
+
     public async Task DownloadAsync(DownloadJob job, IProgress<ProgressInfo>? progress, CancellationToken cancellationToken = default)
     {
         // URLが空の場合はエラー
@@ -407,6 +452,7 @@ public class YtDlpClient : IYtDlpClient
         }
 
         var ytDlpPath = GetYtDlpPath();
+        await EnsureYtDlpUpdatedAsync(ytDlpPath, cancellationToken);
         var settings = _settingsRepository.Load();
 
         // 保存先フォルダを作成
@@ -416,56 +462,36 @@ public class YtDlpClient : IYtDlpClient
         var template = BuildFilenameTemplate(settings.FilenameTemplate, job);
         var outputPath = Path.Combine(job.SaveFolderPath, template);
 
+        var requestedFormat = NormalizeFormat(job.Format);
+
         // コマンド引数を構築
         var args = new StringBuilder();
 
         // 出力テンプレート
         args.Append($"-o \"{outputPath}\" ");
+        args.Append("--force-overwrites ");
+        args.Append(BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage));
 
         // フォーマット指定
-        if (job.Format == "mp3" || job.Format == "m4a" || job.Format == "wav")
+        if (IsAudioFormat(requestedFormat))
         {
             // 音声のみ - bestaudioを取得して変換
             args.Append("-f \"bestaudio/best\" ");
             args.Append("-x ");
-            args.Append($"--audio-format {job.Format} ");
+            args.Append($"--audio-format {requestedFormat} ");
             args.Append("--audio-quality 0 ");
         }
         else
         {
-            // 動画 - より柔軟なフォーマット指定（フォールバック付き）
-            if (job.Quality == "best")
-            {
-                args.Append("-f \"bv*+ba/b\" ");
-            }
-            else if (job.Quality == "1080p")
-            {
-                args.Append("-f \"bv*[height<=1080]+ba/b[height<=1080]/b\" ");
-            }
-            else if (job.Quality == "720p")
-            {
-                args.Append("-f \"bv*[height<=720]+ba/b[height<=720]/b\" ");
-            }
-            else if (job.Quality == "480p")
-            {
-                args.Append("-f \"bv*[height<=480]+ba/b[height<=480]/b\" ");
-            }
-            else if (job.Quality == "360p")
-            {
-                args.Append("-f \"bv*[height<=360]+ba/b[height<=360]/b\" ");
-            }
-            else
-            {
-                args.Append("-f \"bv*+ba/b\" ");
-            }
-            args.Append("--merge-output-format mp4 ");
+            args.Append($"-f \"{BuildVideoFormatSelector(job.Quality, requestedFormat)}\" ");
+            args.Append($"--merge-output-format {requestedFormat} ");
         }
 
         // メタデータを埋め込む
         args.Append("--embed-metadata ");
         
         // サムネイルを埋め込む（音声ファイルの場合はアートワークとして）
-        if (job.Format == "mp3" || job.Format == "m4a")
+        if (requestedFormat == "mp3" || requestedFormat == "m4a")
         {
             args.Append("--embed-thumbnail ");
         }
@@ -546,9 +572,9 @@ public class YtDlpClient : IYtDlpClient
         {
             var stderr = errorOutput.ToString();
 
-            // 403系は android client で再試行（web強制より成功率が高い）
-            if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
-                stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
+            // 403系は android client で再試行。ただし動画の高画質指定では android 側が
+            // 360p単体mp4だけを返すことがあるため、品質を下げて成功扱いにはしない。
+            if (IsHttpForbidden(stderr) && CanRetryWithAndroidWithoutQualityDowngrade(job, requestedFormat))
             {
                 var retryArgs = new StringBuilder(args.ToString());
                 retryArgs.Append(" --extractor-args \"youtube:player_client=android\"");
@@ -607,6 +633,13 @@ public class YtDlpClient : IYtDlpClient
                     throw new Exception($"ダウンロードに失敗しました: {retryErrorOutput}");
                 }
             }
+            else if (IsHttpForbidden(stderr))
+            {
+                throw new Exception(
+                    "高画質形式のダウンロードが YouTube 側の 403 エラーで拒否されました。" +
+                    "360pへ自動低下しないよう停止しました。yt-dlp を最新版へ更新するか、" +
+                    "必要に応じて cookies / PO Token を設定してから再試行してください。");
+            }
             else
             {
                 throw new Exception($"ダウンロードに失敗しました: {stderr}");
@@ -614,11 +647,188 @@ public class YtDlpClient : IYtDlpClient
         }
 
         // ダウンロードしたファイルのパスを更新
-        var files = Directory.GetFiles(job.SaveFolderPath, $"{Path.GetFileNameWithoutExtension(template)}.*");
+        var outputBaseName = template.EndsWith(".%(ext)s", StringComparison.OrdinalIgnoreCase)
+            ? template[..^".%(ext)s".Length]
+            : Path.GetFileNameWithoutExtension(template);
+        var files = Directory.GetFiles(job.SaveFolderPath, $"{Path.GetFileName(outputBaseName)}.*");
         if (files.Length > 0)
         {
             job.VideoMetadata.LocalFilePath = files[0];
         }
+    }
+
+    private static string NormalizeFormat(string format)
+    {
+        var normalized = format.Trim().ToLowerInvariant();
+        return IsAudioFormat(normalized) || normalized is "mp4" or "mkv" or "webm"
+            ? normalized
+            : "mp4";
+    }
+
+    private static bool IsAudioFormat(string format)
+    {
+        return format is "mp3" or "m4a" or "wav";
+    }
+
+    private static string BuildVideoFormatSelector(string quality, string requestedFormat)
+    {
+        return requestedFormat == "mp4"
+            ? BuildMp4VideoFormatSelector(quality)
+            : BuildGeneralVideoFormatSelector(quality);
+    }
+
+    private static string BuildMp4VideoFormatSelector(string quality)
+    {
+        return quality switch
+        {
+            "1080p" => BuildMp4SelectorForHeights(1080, 720),
+            "720p" => BuildMp4SelectorForHeights(720, 480),
+            "480p" => BuildMp4SelectorForHeights(480, 360),
+            "360p" => BuildMp4SelectorForHeights(360, 360),
+            _ => "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b"
+        };
+    }
+
+    private static string BuildMp4SelectorForHeights(int targetHeight, int fallbackMinHeight)
+    {
+        var exactHeightSelector =
+            $"bv*[height={targetHeight}][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/" +
+            $"bv*[height={targetHeight}][ext=mp4]+ba[ext=m4a]/" +
+            $"b[height={targetHeight}][ext=mp4]";
+
+        if (fallbackMinHeight >= targetHeight)
+        {
+            return exactHeightSelector;
+        }
+
+        var fallbackSelector =
+            $"bv*[height<={targetHeight}][height>={fallbackMinHeight}][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/" +
+            $"bv*[height<={targetHeight}][height>={fallbackMinHeight}][ext=mp4]+ba[ext=m4a]/" +
+            $"b[height<={targetHeight}][height>={fallbackMinHeight}][ext=mp4]";
+
+        return $"{exactHeightSelector}/{fallbackSelector}";
+    }
+
+    private static string BuildGeneralVideoFormatSelector(string quality)
+    {
+        return quality switch
+        {
+            "1080p" => "bv*[height=1080]+ba/b[height=1080]/bv*[height<=1080][height>=720]+ba/b[height<=1080][height>=720]",
+            "720p" => "bv*[height=720]+ba/b[height=720]/bv*[height<=720][height>=480]+ba/b[height<=720][height>=480]",
+            "480p" => "bv*[height=480]+ba/b[height=480]/bv*[height<=480][height>=360]+ba/b[height<=480][height>=360]",
+            "360p" => "bv*[height=360]+ba/b[height=360]/b[height=360]",
+            _ => "bv*+ba/b"
+        };
+    }
+
+    private static bool IsHttpForbidden(string stderr)
+    {
+        return stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
+               stderr.Contains("403: Forbidden", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool CanRetryWithAndroidWithoutQualityDowngrade(DownloadJob job, string requestedFormat)
+    {
+        return IsAudioFormat(requestedFormat) || job.Quality == "360p";
+    }
+
+    public async Task<YtDlpUpdateResult> UpdateYtDlpAsync(CancellationToken cancellationToken = default)
+    {
+        var ytDlpPath = GetYtDlpPath();
+
+        await _ytDlpUpdateLock.WaitAsync(cancellationToken);
+        try
+        {
+            var result = await RunYtDlpUpdateAsync(ytDlpPath, cancellationToken);
+            _hasCheckedYtDlpUpdate = true;
+            return result;
+        }
+        finally
+        {
+            _ytDlpUpdateLock.Release();
+        }
+    }
+
+    private async Task EnsureYtDlpUpdatedAsync(string ytDlpPath, CancellationToken cancellationToken)
+    {
+        var settings = _settingsRepository.Load();
+        if (!settings.AutoUpdateYtDlp || _hasCheckedYtDlpUpdate)
+        {
+            return;
+        }
+
+        await _ytDlpUpdateLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_hasCheckedYtDlpUpdate)
+            {
+                return;
+            }
+
+            var result = await RunYtDlpUpdateAsync(ytDlpPath, cancellationToken);
+            _hasCheckedYtDlpUpdate = true;
+
+            if (!result.IsSuccess)
+            {
+                Debug.WriteLine($"yt-dlp auto update failed: {result.Output}");
+            }
+        }
+        finally
+        {
+            _ytDlpUpdateLock.Release();
+        }
+    }
+
+    private static async Task<YtDlpUpdateResult> RunYtDlpUpdateAsync(string ytDlpPath, CancellationToken cancellationToken)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = ytDlpPath,
+            Arguments = "-U",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        using var process = new Process { StartInfo = psi };
+        process.Start();
+
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+        await Task.WhenAll(outputTask, errorTask);
+        await process.WaitForExitAsync(cancellationToken);
+
+        var output = string.Join(
+            Environment.NewLine,
+            new[] { outputTask.Result, errorTask.Result }.Where(text => !string.IsNullOrWhiteSpace(text)));
+
+        return new YtDlpUpdateResult
+        {
+            IsSuccess = process.ExitCode == 0,
+            Message = process.ExitCode == 0 ? BuildUpdateSuccessMessage(output) : "yt-dlpの更新に失敗しました。",
+            Output = output
+        };
+    }
+
+    private static string BuildUpdateSuccessMessage(string output)
+    {
+        if (output.Contains("is up to date", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Latest version", StringComparison.OrdinalIgnoreCase))
+        {
+            return "yt-dlpは最新です。";
+        }
+
+        if (output.Contains("Updated", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Updating", StringComparison.OrdinalIgnoreCase))
+        {
+            return "yt-dlpを更新しました。";
+        }
+
+        return "yt-dlpの更新チェックが完了しました。";
     }
 
     private string BuildFilenameTemplate(string template, DownloadJob job)
@@ -640,9 +850,8 @@ public class YtDlpClient : IYtDlpClient
         }
 
         // 拡張子を追加
-        var ext = job.Format == "mp3" || job.Format == "m4a" ? job.Format : "mp4";
         result = result.Trim();
-        if (!result.EndsWith($".{ext}"))
+        if (!Path.HasExtension(result))
         {
             result += $".%(ext)s";
         }

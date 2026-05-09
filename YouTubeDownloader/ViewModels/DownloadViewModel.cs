@@ -109,7 +109,7 @@ public partial class DownloadViewModel : ViewModelBase
 
     public string[] VideoFormats { get; } = { "mp4", "mkv", "webm" };
     public string[] AudioFormats { get; } = { "mp3", "m4a", "wav" };
-    public string[] Qualities { get; } = { "best", "1080p", "720p", "480p" };
+    public string[] Qualities { get; } = { "best", "1080p", "720p", "480p", "360p" };
 
     public string[] CurrentFormats => IsAudioOnly ? AudioFormats : VideoFormats;
 

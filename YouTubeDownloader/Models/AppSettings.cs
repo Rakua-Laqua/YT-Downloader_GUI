@@ -14,6 +14,12 @@ public class AppSettings
     /// <summary>ffmpeg実行ファイルパス</summary>
     public string FfmpegPath { get; set; } = string.Empty;
 
+    /// <summary>yt-dlpを初回利用前に自動更新するか</summary>
+    public bool AutoUpdateYtDlp { get; set; } = true;
+
+    /// <summary>動画タイトルなどのメタデータ取得に使う既定言語</summary>
+    public string DefaultMetadataLanguage { get; set; } = "ja";
+
     /// <summary>デフォルト保存先フォルダ</summary>
     public string DefaultSaveFolder { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),

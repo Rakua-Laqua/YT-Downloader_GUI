@@ -70,6 +70,26 @@
                         </Grid>
                         <TextBlock Text="※ 空欄の場合は自動検出されたパスを使用します"
                                    Foreground="Gray" FontSize="11" Margin="0,5,0,0"/>
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <CheckBox Content="yt-dlpを初回利用前に自動更新する"
+                                          IsChecked="{Binding AutoUpdateYtDlp}"
+                                          VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding YtDlpUpdateStatus}"
+                                           Foreground="Gray" FontSize="11" Margin="0,5,0,0"/>
+                            </StackPanel>
+
+                            <Button Grid.Column="1"
+                                    Content="今すぐ更新"
+                                    Command="{Binding UpdateYtDlpCommand}"
+                                    Padding="15,8" Margin="10,0,0,0"
+                                    VerticalAlignment="Center"/>
+                        </Grid>
                     </StackPanel>
 
                     <!-- ffmpeg パス -->
@@ -146,6 +166,19 @@
                                     Command="{Binding BrowseDefaultSaveFolderCommand}"
                                     Padding="15,8" Margin="10,0,0,0"/>
                         </Grid>
+                    </StackPanel>
+
+                    <!-- タイトル取得言語 -->
+                    <StackPanel Margin="0,0,0,20">
+                        <TextBlock Text="タイトル取得言語" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <ComboBox ItemsSource="{Binding MetadataLanguages}"
+                                  Text="{Binding DefaultMetadataLanguage, UpdateSourceTrigger=PropertyChanged}"
+                                  IsEditable="True"
+                                  Padding="10,8"
+                                  MinWidth="180"
+                                  HorizontalAlignment="Left"/>
+                        <TextBlock Text="例: ja / en / default。変更後に解析し直すと反映されます。"
+                                   Foreground="Gray" FontSize="11" Margin="0,5,0,0"/>
                     </StackPanel>
 
                     <!-- フォーマット設定 -->
