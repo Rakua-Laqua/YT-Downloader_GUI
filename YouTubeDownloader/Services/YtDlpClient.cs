@@ -52,26 +52,26 @@ public class YtDlpClient : IYtDlpClient
     private string GetYtDlpPath()
     {
         var settings = _settingsRepository.Load();
-        
+
         // 設定で指定されていればそれを使用
         if (!string.IsNullOrEmpty(settings.YtDlpPath) && File.Exists(settings.YtDlpPath))
         {
             return settings.YtDlpPath;
         }
-        
+
         // キャッシュがあればそれを使用
         if (!string.IsNullOrEmpty(_cachedYtDlpPath) && File.Exists(_cachedYtDlpPath))
         {
             return _cachedYtDlpPath;
         }
-        
-        // 自動検出
-        _cachedYtDlpPath = FindExecutable("yt-dlp.exe", "yt-dlp");
+
+        // 自動検出（検索ロジックは ExecutableLocator に集約）
+        _cachedYtDlpPath = ExecutableLocator.FindExecutable("yt-dlp.exe", "yt-dlp");
         if (!string.IsNullOrEmpty(_cachedYtDlpPath))
         {
             return _cachedYtDlpPath;
         }
-        
+
         throw new InvalidOperationException("yt-dlpが見つかりません。yt-dlpをインストールするか、設定画面でパスを指定してください。");
     }
 
@@ -82,62 +82,10 @@ public class YtDlpClient : IYtDlpClient
         {
             return _cachedFfmpegPath;
         }
-        
-        // 自動検出
-        _cachedFfmpegPath = FindExecutable("ffmpeg.exe", "ffmpeg");
-        return _cachedFfmpegPath;
-    }
 
-    private static string? FindExecutable(string windowsName, string unixName)
-    {
-        var exeName = Environment.OSVersion.Platform == PlatformID.Win32NT ? windowsName : unixName;
-        
-        // 1. PATH環境変数から検索
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
-        {
-            foreach (var path in pathEnv.Split(Path.PathSeparator))
-            {
-                var fullPath = Path.Combine(path, exeName);
-                if (File.Exists(fullPath))
-                {
-                    return fullPath;
-                }
-            }
-        }
-        
-        // 2. 一般的なインストール場所を検索 (Windows)
-        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
-        {
-            var commonPaths = new[]
-            {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WinGet", "Links", exeName),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), exeName.Replace(".exe", ""), exeName),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), exeName.Replace(".exe", ""), exeName),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "scoop", "shims", exeName),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local", "Programs", exeName.Replace(".exe", ""), exeName),
-                Path.Combine("C:\\", exeName.Replace(".exe", ""), exeName),
-                Path.Combine("C:\\tools", exeName),
-            };
-            
-            foreach (var path in commonPaths)
-            {
-                if (File.Exists(path))
-                {
-                    return path;
-                }
-            }
-        }
-        
-        // 3. アプリケーションディレクトリ
-        var appDir = AppDomain.CurrentDomain.BaseDirectory;
-        var appPath = Path.Combine(appDir, exeName);
-        if (File.Exists(appPath))
-        {
-            return appPath;
-        }
-        
-        return null;
+        // 自動検出
+        _cachedFfmpegPath = ExecutableLocator.FindExecutable("ffmpeg.exe", "ffmpeg");
+        return _cachedFfmpegPath;
     }
 
     public async Task<YtDlpAnalyzeResult> AnalyzeUrlAsync(string url, CancellationToken cancellationToken = default)
@@ -194,7 +142,7 @@ public class YtDlpClient : IYtDlpClient
         }
     }
 
-    private YtDlpAnalyzeResult ParsePlaylistFromJson(string json)
+    private static YtDlpAnalyzeResult ParsePlaylistFromJson(string json)
     {
         try
         {
@@ -254,75 +202,7 @@ public class YtDlpClient : IYtDlpClient
         }
     }
 
-    private async Task<YtDlpAnalyzeResult> ParsePlaylistAsync(string ytDlpPath, string url, string[] lines, CancellationToken cancellationToken)
-    {
-        var playlist = new PlaylistMetadata();
-        var videos = new List<VideoMetadata>();
-
-        var settings = _settingsRepository.Load();
-        var localizationArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage);
-
-        // プレイリスト情報を取得
-        var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"{localizationArgs} --dump-single-json --flat-playlist \"{url}\"", cancellationToken);
-        if (!string.IsNullOrEmpty(playlistInfoResult))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(playlistInfoResult);
-                var root = doc.RootElement;
-
-                playlist.Id = GetStringProperty(root, "id") ?? "";
-                playlist.Title = GetStringProperty(root, "title") ?? "プレイリスト";
-                playlist.Channel = GetStringProperty(root, "uploader") ?? GetStringProperty(root, "channel") ?? "";
-                playlist.ThumbnailUrl = GetThumbnailUrl(root);
-
-                if (root.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array)
-                {
-                    int index = 1;
-                    foreach (var entry in entries.EnumerateArray())
-                    {
-                        var videoId = GetStringProperty(entry, "id") ?? "";
-                        var video = new VideoMetadata
-                        {
-                            Id = videoId,
-                            Title = GetStringProperty(entry, "title") ?? $"動画 {index}",
-                            Channel = GetStringProperty(entry, "uploader") ?? GetStringProperty(entry, "channel") ?? playlist.Channel,
-                            DurationSeconds = GetIntProperty(entry, "duration"),
-                            ThumbnailUrl = GetThumbnailUrl(entry),
-                            // 常にYouTube動画URLを正しく構築
-                            Url = !string.IsNullOrEmpty(videoId) ? $"https://www.youtube.com/watch?v={videoId}" : "",
-                            PlaylistId = playlist.Id,
-                            PlaylistIndex = index
-                        };
-                        videos.Add(video);
-                        index++;
-                    }
-                }
-
-                playlist.Videos = videos;
-                playlist.VideoCount = videos.Count;
-
-                return new YtDlpAnalyzeResult
-                {
-                    IsSuccess = true,
-                    IsPlaylist = true,
-                    PlaylistMetadata = playlist
-                };
-            }
-            catch
-            {
-                // パースに失敗した場合は単一動画として再解析
-            }
-        }
-
-        return new YtDlpAnalyzeResult
-        {
-            IsSuccess = false,
-            ErrorMessage = "プレイリスト情報の取得に失敗しました。"
-        };
-    }
-
-    private VideoMetadata? ParseVideoMetadata(string json, string url)
+    private static VideoMetadata? ParseVideoMetadata(string json, string url)
     {
         try
         {
@@ -356,7 +236,7 @@ public class YtDlpClient : IYtDlpClient
         }
     }
 
-    private string? GetStringProperty(JsonElement element, string propertyName)
+    private static string? GetStringProperty(JsonElement element, string propertyName)
     {
         if (element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String)
         {
@@ -365,7 +245,7 @@ public class YtDlpClient : IYtDlpClient
         return null;
     }
 
-    private int GetIntProperty(JsonElement element, string propertyName)
+    private static int GetIntProperty(JsonElement element, string propertyName)
     {
         if (element.TryGetProperty(propertyName, out var prop))
         {
@@ -381,7 +261,7 @@ public class YtDlpClient : IYtDlpClient
         return 0;
     }
 
-    private string GetThumbnailUrl(JsonElement element)
+    private static string GetThumbnailUrl(JsonElement element)
     {
         // thumbnailプロパティを優先
         if (element.TryGetProperty("thumbnail", out var thumb) && thumb.ValueKind == JsonValueKind.String)
@@ -477,8 +357,49 @@ public class YtDlpClient : IYtDlpClient
         var outputPath = Path.Combine(job.SaveFolderPath, template);
 
         var requestedFormat = NormalizeFormat(job.Format);
+        var arguments = BuildDownloadArguments(job, settings, outputPath, requestedFormat);
 
-        // コマンド引数を構築
+        Debug.WriteLine($"yt-dlp: {ytDlpPath} {arguments}");
+        var (exitCode, stderr) = await RunDownloadProcessAsync(ytDlpPath, arguments, progress, cancellationToken);
+
+        if (exitCode != 0)
+        {
+            // 403系は android client で再試行（web強制より成功率が高い）
+            if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
+                stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
+            {
+                var retryArguments = BuildAndroidRetryArguments(arguments, settings);
+
+                Debug.WriteLine($"yt-dlp retry(android): {ytDlpPath} {retryArguments}");
+                var (retryExitCode, retryStderr) = await RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, cancellationToken);
+
+                if (retryExitCode != 0)
+                {
+                    throw new Exception($"ダウンロードに失敗しました: {retryStderr}");
+                }
+            }
+            // NOTE: 上の分岐の "403" 判定が IsHttpForbidden の対象を包含しているため、現状この分岐には到達しない
+            else if (IsHttpForbidden(stderr))
+            {
+                throw new Exception(
+                    "高画質形式のダウンロードが YouTube 側の 403 エラーで拒否されました。" +
+                    "360pへ自動低下しないよう停止しました。yt-dlp を最新版へ更新するか、" +
+                    "必要に応じて cookies / PO Token を設定してから再試行してください。");
+            }
+            else
+            {
+                throw new Exception($"ダウンロードに失敗しました: {stderr}");
+            }
+        }
+
+        UpdateLocalFilePath(job, template);
+    }
+
+    /// <summary>
+    /// ダウンロード用のyt-dlpコマンドライン引数を構築する
+    /// </summary>
+    private static string BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat)
+    {
         var args = new StringBuilder();
 
         // タイトル等のローカライズは設定画面の「タイトル取得言語」を優先する
@@ -504,7 +425,7 @@ public class YtDlpClient : IYtDlpClient
 
         // メタデータを埋め込む
         args.Append("--embed-metadata ");
-        
+
         // サムネイルを埋め込む（音声ファイルの場合はアートワークとして）
         if (requestedFormat == "mp3" || requestedFormat == "m4a")
         {
@@ -512,10 +433,10 @@ public class YtDlpClient : IYtDlpClient
         }
 
         // ffmpegパスを自動検出または設定から取得
-        var ffmpegPath = !string.IsNullOrEmpty(settings.FfmpegPath) && File.Exists(settings.FfmpegPath) 
-            ? settings.FfmpegPath 
+        var ffmpegPath = !string.IsNullOrEmpty(settings.FfmpegPath) && File.Exists(settings.FfmpegPath)
+            ? settings.FfmpegPath
             : GetFfmpegPath();
-        
+
         if (!string.IsNullOrEmpty(ffmpegPath))
         {
             var ffmpegDir = Path.GetDirectoryName(ffmpegPath);
@@ -533,10 +454,44 @@ public class YtDlpClient : IYtDlpClient
         // URL
         args.Append($"\"{job.VideoMetadata.Url}\"");
 
+        return args.ToString();
+    }
+
+    /// <summary>
+    /// 初回の引数の --extractor-args を player_client=android 付きに差し替えたリトライ用引数を構築する
+    /// </summary>
+    private static string BuildAndroidRetryArguments(string arguments, AppSettings settings)
+    {
+        var retryArgs = new StringBuilder(arguments);
+        var metadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage);
+        var retryMetadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, "android");
+        if (!string.IsNullOrEmpty(metadataArgs) && arguments.Contains(metadataArgs, StringComparison.Ordinal))
+        {
+            retryArgs.Replace(metadataArgs, retryMetadataArgs);
+        }
+        else if (!string.IsNullOrEmpty(retryMetadataArgs))
+        {
+            retryArgs.Append(' ');
+            retryArgs.Append(retryMetadataArgs);
+        }
+
+        return retryArgs.ToString();
+    }
+
+    /// <summary>
+    /// yt-dlpのダウンロードプロセスを起動し、stdoutから進捗を報告しながら終了コードとstderrを返す。
+    /// 初回実行と403リトライで共通。
+    /// </summary>
+    private static async Task<(int ExitCode, string StdErr)> RunDownloadProcessAsync(
+        string ytDlpPath,
+        string arguments,
+        IProgress<ProgressInfo>? progress,
+        CancellationToken cancellationToken)
+    {
         var psi = new ProcessStartInfo
         {
             FileName = ytDlpPath,
-            Arguments = args.ToString(),
+            Arguments = arguments,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -544,8 +499,6 @@ public class YtDlpClient : IYtDlpClient
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
-
-        System.Diagnostics.Debug.WriteLine($"yt-dlp: {ytDlpPath} {args}");
 
         using var process = new Process { StartInfo = psi };
         process.Start();
@@ -583,95 +536,14 @@ public class YtDlpClient : IYtDlpClient
         await Task.WhenAll(outputTask, errorTask);
         await process.WaitForExitAsync(cancellationToken);
 
-        if (process.ExitCode != 0)
-        {
-            var stderr = errorOutput.ToString();
+        return (process.ExitCode, errorOutput.ToString());
+    }
 
-            // 403系は android client で再試行（web強制より成功率が高い）
-            if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
-                stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
-            {
-                var retryArgs = new StringBuilder(args.ToString());
-                var metadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage);
-                var retryMetadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, "android");
-                if (!string.IsNullOrEmpty(metadataArgs) && retryArgs.ToString().Contains(metadataArgs, StringComparison.Ordinal))
-                {
-                    retryArgs.Replace(metadataArgs, retryMetadataArgs);
-                }
-                else if (!string.IsNullOrEmpty(retryMetadataArgs))
-                {
-                    retryArgs.Append(' ');
-                    retryArgs.Append(retryMetadataArgs);
-                }
-
-                var retryPsi = new ProcessStartInfo
-                {
-                    FileName = ytDlpPath,
-                    Arguments = retryArgs.ToString(),
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true,
-                    StandardOutputEncoding = Encoding.UTF8,
-                    StandardErrorEncoding = Encoding.UTF8
-                };
-
-                System.Diagnostics.Debug.WriteLine($"yt-dlp retry(android): {ytDlpPath} {retryArgs}");
-
-                using var retryProcess = new Process { StartInfo = retryPsi };
-                retryProcess.Start();
-
-                var retryOutputTask = Task.Run(async () =>
-                {
-                    while (!retryProcess.StandardOutput.EndOfStream)
-                    {
-                        var line = await retryProcess.StandardOutput.ReadLineAsync();
-                        if (line != null && progress != null)
-                        {
-                            var progressInfo = ParseProgressLine(line);
-                            if (progressInfo != null)
-                            {
-                                progress.Report(progressInfo);
-                            }
-                        }
-                    }
-                }, cancellationToken);
-
-                var retryErrorOutput = new StringBuilder();
-                var retryErrorTask = Task.Run(async () =>
-                {
-                    while (!retryProcess.StandardError.EndOfStream)
-                    {
-                        var line = await retryProcess.StandardError.ReadLineAsync();
-                        if (line != null)
-                        {
-                            retryErrorOutput.AppendLine(line);
-                        }
-                    }
-                }, cancellationToken);
-
-                await Task.WhenAll(retryOutputTask, retryErrorTask);
-                await retryProcess.WaitForExitAsync(cancellationToken);
-
-                if (retryProcess.ExitCode != 0)
-                {
-                    throw new Exception($"ダウンロードに失敗しました: {retryErrorOutput}");
-                }
-            }
-            else if (IsHttpForbidden(stderr))
-            {
-                throw new Exception(
-                    "高画質形式のダウンロードが YouTube 側の 403 エラーで拒否されました。" +
-                    "360pへ自動低下しないよう停止しました。yt-dlp を最新版へ更新するか、" +
-                    "必要に応じて cookies / PO Token を設定してから再試行してください。");
-            }
-            else
-            {
-                throw new Exception($"ダウンロードに失敗しました: {stderr}");
-            }
-        }
-
-        // ダウンロードしたファイルのパスを更新
+    /// <summary>
+    /// ダウンロード完了後、出力テンプレートに一致する実ファイルを探してジョブに記録する
+    /// </summary>
+    private static void UpdateLocalFilePath(DownloadJob job, string template)
+    {
         var outputBaseName = template.EndsWith(".%(ext)s", StringComparison.OrdinalIgnoreCase)
             ? template[..^".%(ext)s".Length]
             : Path.GetFileNameWithoutExtension(template);
@@ -750,11 +622,6 @@ public class YtDlpClient : IYtDlpClient
     {
         return stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
                stderr.Contains("403: Forbidden", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool CanRetryWithAndroidWithoutQualityDowngrade(DownloadJob job, string requestedFormat)
-    {
-        return IsAudioFormat(requestedFormat) || job.Quality == "360p";
     }
 
     public async Task<YtDlpUpdateResult> UpdateYtDlpAsync(CancellationToken cancellationToken = default)
@@ -856,7 +723,7 @@ public class YtDlpClient : IYtDlpClient
         return "yt-dlpの更新チェックが完了しました。";
     }
 
-    private string BuildFilenameTemplate(string template, DownloadJob job)
+    private static string BuildFilenameTemplate(string template, DownloadJob job)
     {
         var result = template
             .Replace("{title}", SanitizeFilename(job.VideoMetadata.Title))
@@ -884,7 +751,7 @@ public class YtDlpClient : IYtDlpClient
         return result;
     }
 
-    private string SanitizeFilename(string filename)
+    private static string SanitizeFilename(string filename)
     {
         var invalid = Path.GetInvalidFileNameChars();
         foreach (var c in invalid)
@@ -894,7 +761,7 @@ public class YtDlpClient : IYtDlpClient
         return filename;
     }
 
-    private ProgressInfo? ParseProgressLine(string line)
+    private static ProgressInfo? ParseProgressLine(string line)
     {
         // [download] 50.0% of 100.00MiB at 5.00MiB/s ETA 00:10
         if (line.Contains("[download]") && line.Contains("%"))
@@ -941,7 +808,7 @@ public class YtDlpClient : IYtDlpClient
         return null;
     }
 
-    private async Task<string> RunYtDlpAsync(string ytDlpPath, string arguments, CancellationToken cancellationToken)
+    private static async Task<string> RunYtDlpAsync(string ytDlpPath, string arguments, CancellationToken cancellationToken)
     {
         var psi = new ProcessStartInfo
         {
@@ -951,16 +818,21 @@ public class YtDlpClient : IYtDlpClient
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
         };
 
         using var process = new Process { StartInfo = psi };
         process.Start();
 
-        var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        // stderrも同時に読み捨てる。リダイレクトしたまま読まないと、
+        // 警告などでパイプバッファが満杯になった時点でyt-dlpがブロックしハングする。
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+        await Task.WhenAll(outputTask, errorTask);
         await process.WaitForExitAsync(cancellationToken);
 
-        return output;
+        return outputTask.Result;
     }
-
 }

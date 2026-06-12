@@ -1,7 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -289,27 +288,9 @@ public partial class DownloadViewModel : ViewModelBase
         }
     }
 
-    [RelayCommand]
-    private void CancelJob(DownloadJobViewModel? job)
-    {
-        if (job != null)
-        {
-            _downloadManager.Cancel(job.Job.Id);
-        }
-    }
-
     private void CancelJob(Guid jobId)
     {
         _downloadManager.Cancel(jobId);
-    }
-
-    [RelayCommand]
-    private void RetryJob(DownloadJobViewModel? job)
-    {
-        if (job != null)
-        {
-            _downloadManager.Retry(job.Job.Id);
-        }
     }
 
     private void RetryJob(Guid jobId)
@@ -364,36 +345,8 @@ public partial class DownloadViewModel : ViewModelBase
             return;
         }
 
-        var url = job.Url;
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            MessageBox.Show("動画URLがありません。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var result = MessageBox.Show(
-            $"YouTubeを既定ブラウザで開きますか？\n\n{job.Title}\n{url}",
-            "確認",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-
-        if (result != MessageBoxResult.Yes)
-        {
-            return;
-        }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = url,
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"ブラウザを開けませんでした: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+        // 確認ダイアログ＋ブラウザ起動はライブラリ画面と共通
+        ExternalLinkOpener.ConfirmAndOpenVideoLink(job.Url, job.Title);
     }
 
     #endregion
