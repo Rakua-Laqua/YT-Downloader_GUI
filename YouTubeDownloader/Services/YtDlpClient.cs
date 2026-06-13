@@ -419,7 +419,7 @@ public class YtDlpClient : IYtDlpClient
         }
         else
         {
-            args.Append($"-f \"{BuildVideoFormatSelector(job.Quality, requestedFormat)}\" ");
+            args.Append($"-f \"{BuildVideoFormatSelector(job.Quality, requestedFormat, settings.PreferHighEfficiencyCodecs)}\" ");
             args.Append($"--merge-output-format {requestedFormat} ");
         }
 
@@ -567,41 +567,61 @@ public class YtDlpClient : IYtDlpClient
         return format is "mp3" or "m4a" or "wav";
     }
 
-    private static string BuildVideoFormatSelector(string quality, string requestedFormat)
+    private static string BuildVideoFormatSelector(string quality, string requestedFormat, bool preferHighEfficiencyCodecs)
     {
         return requestedFormat == "mp4"
-            ? BuildMp4VideoFormatSelector(quality)
+            ? BuildMp4VideoFormatSelector(quality, preferHighEfficiencyCodecs)
             : BuildGeneralVideoFormatSelector(quality);
     }
 
-    private static string BuildMp4VideoFormatSelector(string quality)
+    private static string BuildMp4VideoFormatSelector(string quality, bool preferHighEfficiencyCodecs)
     {
         return quality switch
         {
-            "1080p" => BuildMp4SelectorForHeights(1080, 720),
-            "720p" => BuildMp4SelectorForHeights(720, 480),
-            "480p" => BuildMp4SelectorForHeights(480, 360),
-            "360p" => BuildMp4SelectorForHeights(360, 360),
-            _ => "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b"
+            "1080p" => BuildMp4SelectorForHeights(1080, 720, preferHighEfficiencyCodecs),
+            "720p" => BuildMp4SelectorForHeights(720, 480, preferHighEfficiencyCodecs),
+            "480p" => BuildMp4SelectorForHeights(480, 360, preferHighEfficiencyCodecs),
+            "360p" => BuildMp4SelectorForHeights(360, 360, preferHighEfficiencyCodecs),
+            _ => BuildBestMp4Selector(preferHighEfficiencyCodecs)
         };
     }
 
-    private static string BuildMp4SelectorForHeights(int targetHeight, int fallbackMinHeight)
+    private static string BuildBestMp4Selector(bool preferHighEfficiencyCodecs)
     {
-        var exactHeightSelector =
+        var compatibleSelector =
+            "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/" +
+            "bv*[ext=mp4]+ba[ext=m4a]/" +
+            "b[ext=mp4]/bv*+ba/b";
+
+        return preferHighEfficiencyCodecs
+            ? $"bv*[ext=mp4][vcodec^=av01]+ba[ext=m4a]/{compatibleSelector}"
+            : compatibleSelector;
+    }
+
+    private static string BuildMp4SelectorForHeights(int targetHeight, int fallbackMinHeight, bool preferHighEfficiencyCodecs)
+    {
+        var compatibleExactHeightSelector =
             $"bv*[height={targetHeight}][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/" +
             $"bv*[height={targetHeight}][ext=mp4]+ba[ext=m4a]/" +
             $"b[height={targetHeight}][ext=mp4]";
+
+        var exactHeightSelector = preferHighEfficiencyCodecs
+            ? $"bv*[height={targetHeight}][ext=mp4][vcodec^=av01]+ba[ext=m4a]/{compatibleExactHeightSelector}"
+            : compatibleExactHeightSelector;
 
         if (fallbackMinHeight >= targetHeight)
         {
             return exactHeightSelector;
         }
 
-        var fallbackSelector =
+        var compatibleFallbackSelector =
             $"bv*[height<={targetHeight}][height>={fallbackMinHeight}][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/" +
             $"bv*[height<={targetHeight}][height>={fallbackMinHeight}][ext=mp4]+ba[ext=m4a]/" +
             $"b[height<={targetHeight}][height>={fallbackMinHeight}][ext=mp4]";
+
+        var fallbackSelector = preferHighEfficiencyCodecs
+            ? $"bv*[height<={targetHeight}][height>={fallbackMinHeight}][ext=mp4][vcodec^=av01]+ba[ext=m4a]/{compatibleFallbackSelector}"
+            : compatibleFallbackSelector;
 
         return $"{exactHeightSelector}/{fallbackSelector}";
     }

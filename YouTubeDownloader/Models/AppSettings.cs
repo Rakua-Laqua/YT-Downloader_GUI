@@ -34,6 +34,9 @@ public class AppSettings
     /// <summary>デフォルト品質</summary>
     public string DefaultQuality { get; set; } = "best";
 
+    /// <summary>mp4でもAV1などの高効率コーデックを優先するか</summary>
+    public bool PreferHighEfficiencyCodecs { get; set; }
+
     /// <summary>ファイル名テンプレート</summary>
     public string FilenameTemplate { get; set; } = "{title}";
 

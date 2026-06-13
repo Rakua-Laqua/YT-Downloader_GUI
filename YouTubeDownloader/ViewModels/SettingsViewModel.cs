@@ -53,6 +53,9 @@ public partial class SettingsViewModel : ViewModelBase
     private string _defaultQuality = "best";
 
     [ObservableProperty]
+    private bool _preferHighEfficiencyCodecs;
+
+    [ObservableProperty]
     private string _filenameTemplate = "{title}";
 
     [ObservableProperty]
@@ -149,6 +152,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.DefaultVideoFormat = DefaultVideoFormat;
         _settings.DefaultAudioFormat = DefaultAudioFormat;
         _settings.DefaultQuality = DefaultQuality;
+        _settings.PreferHighEfficiencyCodecs = PreferHighEfficiencyCodecs;
         _settings.FilenameTemplate = FilenameTemplate;
 
         await _settingsRepository.SaveAsync(_settings);
@@ -204,6 +208,7 @@ public partial class SettingsViewModel : ViewModelBase
         DefaultVideoFormat = _settings.DefaultVideoFormat;
         DefaultAudioFormat = _settings.DefaultAudioFormat;
         DefaultQuality = _settings.DefaultQuality;
+        PreferHighEfficiencyCodecs = _settings.PreferHighEfficiencyCodecs;
         FilenameTemplate = _settings.FilenameTemplate;
 
         ValidatePaths();

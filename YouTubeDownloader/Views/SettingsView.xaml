@@ -211,6 +211,14 @@
                         </StackPanel>
                     </Grid>
 
+                    <StackPanel Margin="0,0,0,20">
+                        <CheckBox Content="mp4でも画質優先コーデック（AV1）を使う"
+                                  IsChecked="{Binding PreferHighEfficiencyCodecs}"/>
+                        <TextBlock Text="ONにするとmp4保存時もAV1を優先します。古い端末や一部編集ソフトでは再生できない場合があります。"
+                                   Foreground="Gray" FontSize="11" Margin="0,5,0,0"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+
                     <!-- ファイル名テンプレート -->
                     <StackPanel>
                         <TextBlock Text="ファイル名テンプレート" FontWeight="SemiBold" Margin="0,0,0,8"/>
