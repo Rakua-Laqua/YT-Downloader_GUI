@@ -22,7 +22,6 @@ public interface IDownloadManager
     void Retry(Guid jobId);
     void ClearCompleted();
     void ClearAll();
-    void SetConcurrency(int max);
 }
 
 public class DownloadJobEventArgs : EventArgs
@@ -40,7 +39,7 @@ public class DownloadManager : IDownloadManager, IDisposable
     private readonly Dictionary<Guid, CancellationTokenSource> _cancellationTokens = new();
     private readonly SemaphoreSlim _semaphore;
     private readonly object _lock = new();
-    private int _maxConcurrency = 2;
+    private const int MaxConcurrency = 2;
     private bool _disposed;
 
     public event EventHandler<DownloadJobEventArgs>? JobProgressChanged;
@@ -50,7 +49,7 @@ public class DownloadManager : IDownloadManager, IDisposable
     {
         _ytDlpClient = ytDlpClient;
         _metadataRepository = metadataRepository;
-        _semaphore = new SemaphoreSlim(_maxConcurrency, _maxConcurrency);
+        _semaphore = new SemaphoreSlim(MaxConcurrency, MaxConcurrency);
     }
 
     public IReadOnlyList<DownloadJob> GetAllJobs()
@@ -78,14 +77,14 @@ public class DownloadManager : IDownloadManager, IDisposable
     {
         await _semaphore.WaitAsync();
 
+        var cts = new CancellationTokenSource();
+        lock (_lock)
+        {
+            _cancellationTokens[job.Id] = cts;
+        }
+
         try
         {
-            var cts = new CancellationTokenSource();
-            lock (_lock)
-            {
-                _cancellationTokens[job.Id] = cts;
-            }
-
             job.Status = DownloadStatus.Running;
             job.StartedAt = DateTime.Now;
             job.Progress = 0;
@@ -127,6 +126,7 @@ public class DownloadManager : IDownloadManager, IDisposable
             {
                 _cancellationTokens.Remove(job.Id);
             }
+            cts.Dispose();
             _semaphore.Release();
         }
     }
@@ -207,11 +207,6 @@ public class DownloadManager : IDownloadManager, IDisposable
         {
             _allJobs.Clear();
         }
-    }
-
-    public void SetConcurrency(int max)
-    {
-        _maxConcurrency = Math.Max(1, Math.Min(5, max));
     }
 
     public void Dispose()

@@ -53,6 +53,9 @@ public partial class SettingsViewModel : ViewModelBase
     private string _defaultQuality = "best";
 
     [ObservableProperty]
+    private bool _preferHighEfficiencyCodecs;
+
+    [ObservableProperty]
     private string _filenameTemplate = "{title}";
 
     [ObservableProperty]
@@ -149,6 +152,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.DefaultVideoFormat = DefaultVideoFormat;
         _settings.DefaultAudioFormat = DefaultAudioFormat;
         _settings.DefaultQuality = DefaultQuality;
+        _settings.PreferHighEfficiencyCodecs = PreferHighEfficiencyCodecs;
         _settings.FilenameTemplate = FilenameTemplate;
 
         await _settingsRepository.SaveAsync(_settings);
@@ -204,6 +208,7 @@ public partial class SettingsViewModel : ViewModelBase
         DefaultVideoFormat = _settings.DefaultVideoFormat;
         DefaultAudioFormat = _settings.DefaultAudioFormat;
         DefaultQuality = _settings.DefaultQuality;
+        PreferHighEfficiencyCodecs = _settings.PreferHighEfficiencyCodecs;
         FilenameTemplate = _settings.FilenameTemplate;
 
         ValidatePaths();
@@ -224,8 +229,8 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void AutoDetectPaths()
     {
-        // yt-dlp自動検出
-        var ytDlpAuto = FindExecutableInPath("yt-dlp.exe");
+        // yt-dlp自動検出（YtDlpClientと同じ探索順を使い、表示と実動作のずれを防ぐ）
+        var ytDlpAuto = ExecutableLocator.FindExecutable("yt-dlp.exe", "yt-dlp");
         if (!string.IsNullOrEmpty(ytDlpAuto))
         {
             YtDlpAutoDetected = $"自動検出: {ytDlpAuto}";
@@ -240,7 +245,7 @@ public partial class SettingsViewModel : ViewModelBase
         }
         
         // ffmpeg自動検出
-        var ffmpegAuto = FindExecutableInPath("ffmpeg.exe");
+        var ffmpegAuto = ExecutableLocator.FindExecutable("ffmpeg.exe", "ffmpeg");
         if (!string.IsNullOrEmpty(ffmpegAuto))
         {
             FfmpegAutoDetected = $"自動検出: {ffmpegAuto}";
@@ -258,42 +263,6 @@ public partial class SettingsViewModel : ViewModelBase
     private bool CanUpdateYtDlp()
     {
         return !IsUpdatingYtDlp && IsYtDlpValid;
-    }
-
-    private static string? FindExecutableInPath(string exeName)
-    {
-        // PATH環境変数から検索
-        var pathEnv = System.Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
-        {
-            foreach (var path in pathEnv.Split(Path.PathSeparator))
-            {
-                var fullPath = Path.Combine(path, exeName);
-                if (File.Exists(fullPath))
-                {
-                    return fullPath;
-                }
-            }
-        }
-        
-        // 一般的なインストール場所
-        var commonPaths = new[]
-        {
-            Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WinGet", "Links", exeName),
-            Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile), "scoop", "shims", exeName),
-            Path.Combine("C:\\", exeName.Replace(".exe", ""), exeName),
-            Path.Combine("C:\\tools", exeName),
-        };
-        
-        foreach (var path in commonPaths)
-        {
-            if (File.Exists(path))
-            {
-                return path;
-            }
-        }
-        
-        return null;
     }
 
     partial void OnFilenameTemplateChanged(string value)

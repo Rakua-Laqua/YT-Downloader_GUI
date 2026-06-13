@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using YouTubeDownloader.Models;
 
@@ -14,7 +15,6 @@ namespace YouTubeDownloader.Services;
 public interface IMetadataRepository
 {
     Task SaveVideoMetadataAsync(VideoMetadata metadata);
-    Task<IEnumerable<VideoMetadata>> GetAllVideosAsync();
     Task<IEnumerable<VideoMetadata>> FindVideosAsync(string? searchQuery = null);
     Task DeleteVideoMetadataAsync(string videoId);
 }
@@ -23,8 +23,11 @@ public class MetadataRepository : IMetadataRepository
 {
     private readonly string _metadataFilePath;
     private readonly JsonSerializerOptions _jsonOptions;
+    // 同時ダウンロードの完了が複数ワーカースレッドから同時に保存してくるため、
+    // キャッシュ(List)とファイルI/Oへのアクセスを直列化する
+    private readonly SemaphoreSlim _mutex = new(1, 1);
     private List<VideoMetadata> _cache = new();
-    private bool _loaded = false;
+    private bool _loaded;
 
     public MetadataRepository()
     {
@@ -39,6 +42,7 @@ public class MetadataRepository : IMetadataRepository
         };
     }
 
+    // 以下のprivateメソッドは必ず _mutex 保持中に呼ぶこと
     private async Task LoadIfNeededAsync()
     {
         if (_loaded) return;
@@ -66,49 +70,64 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task SaveVideoMetadataAsync(VideoMetadata metadata)
     {
-        await LoadIfNeededAsync();
-
-        var existing = _cache.FindIndex(v => v.Id == metadata.Id);
-        if (existing >= 0)
+        await _mutex.WaitAsync();
+        try
         {
-            _cache[existing] = metadata;
+            await LoadIfNeededAsync();
+
+            var existing = _cache.FindIndex(v => v.Id == metadata.Id);
+            if (existing >= 0)
+            {
+                _cache[existing] = metadata;
+            }
+            else
+            {
+                _cache.Add(metadata);
+            }
+
+            await SaveAsync();
         }
-        else
+        finally
         {
-            _cache.Add(metadata);
+            _mutex.Release();
         }
-
-        await SaveAsync();
-    }
-
-    public async Task<IEnumerable<VideoMetadata>> GetAllVideosAsync()
-    {
-        await LoadIfNeededAsync();
-        return _cache.OrderByDescending(v => v.DownloadedAt).ToList();
     }
 
     public async Task<IEnumerable<VideoMetadata>> FindVideosAsync(string? searchQuery = null)
     {
-        await LoadIfNeededAsync();
-
-        if (string.IsNullOrWhiteSpace(searchQuery))
+        await _mutex.WaitAsync();
+        try
         {
-            return _cache.OrderByDescending(v => v.DownloadedAt).ToList();
-        }
+            await LoadIfNeededAsync();
 
-        var query = searchQuery.ToLowerInvariant();
-        return _cache
-            .Where(v =>
-                v.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                v.Channel.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(v => v.DownloadedAt)
-            .ToList();
+            IEnumerable<VideoMetadata> videos = _cache;
+            if (!string.IsNullOrWhiteSpace(searchQuery))
+            {
+                videos = videos.Where(v =>
+                    v.Title.Contains(searchQuery, StringComparison.OrdinalIgnoreCase) ||
+                    v.Channel.Contains(searchQuery, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return videos.OrderByDescending(v => v.DownloadedAt).ToList();
+        }
+        finally
+        {
+            _mutex.Release();
+        }
     }
 
     public async Task DeleteVideoMetadataAsync(string videoId)
     {
-        await LoadIfNeededAsync();
-        _cache.RemoveAll(v => v.Id == videoId);
-        await SaveAsync();
+        await _mutex.WaitAsync();
+        try
+        {
+            await LoadIfNeededAsync();
+            _cache.RemoveAll(v => v.Id == videoId);
+            await SaveAsync();
+        }
+        finally
+        {
+            _mutex.Release();
+        }
     }
 }

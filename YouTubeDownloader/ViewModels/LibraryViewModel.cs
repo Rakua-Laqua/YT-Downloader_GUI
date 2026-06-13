@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using YouTubeDownloader.Infrastructure;
 using YouTubeDownloader.Services;
 
 namespace YouTubeDownloader.ViewModels;
@@ -127,36 +128,8 @@ public partial class LibraryViewModel : ViewModelBase
             return;
         }
 
-        var url = item.Url;
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            MessageBox.Show("動画URLがありません。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var result = MessageBox.Show(
-            $"YouTubeを既定ブラウザで開きますか？\n\n{item.Title}\n{url}",
-            "確認",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-
-        if (result != MessageBoxResult.Yes)
-        {
-            return;
-        }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = url,
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"ブラウザを開けませんでした: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+        // 確認ダイアログ＋ブラウザ起動はダウンロード画面と共通
+        ExternalLinkOpener.ConfirmAndOpenVideoLink(item.Url, item.Title);
     }
 
     #endregion
