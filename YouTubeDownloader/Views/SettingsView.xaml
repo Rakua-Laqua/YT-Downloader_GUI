@@ -197,7 +197,7 @@
                                   Padding="10,8"
                                   MinWidth="180"
                                   HorizontalAlignment="Left"/>
-                        <TextBlock Text="例: ja / en / default。変更後に解析し直すと反映されます。"
+                        <TextBlock Text="default は動画の主言語を優先します。ja / en などを指定すると、その言語の翻訳タイトルを優先します。変更後に解析し直すと反映されます。"
                                    Foreground="Gray" FontSize="11" Margin="0,5,0,0"/>
                     </StackPanel>
 

@@ -428,7 +428,7 @@ public class YtDlpClient : IYtDlpClient
     {
         if (string.IsNullOrWhiteSpace(language))
         {
-            return "ja";
+            return string.Empty;
         }
 
         var trimmed = language.Trim();
@@ -441,7 +441,7 @@ public class YtDlpClient : IYtDlpClient
         {
             if (!char.IsLetterOrDigit(c) && c != '-' && c != '_')
             {
-                return "ja";
+                return string.Empty;
             }
         }
 
