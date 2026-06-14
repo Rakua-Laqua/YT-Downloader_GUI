@@ -34,6 +34,9 @@ public class ProgressInfo
     public string? Status { get; set; }
     public string? Speed { get; set; }
     public string? Eta { get; set; }
+
+    /// <summary>変換・埋め込みなどの後処理フェーズ（パーセンテージが取れない区間）かどうか</summary>
+    public bool IsPostProcessing { get; set; }
 }
 
 public class YtDlpClient : IYtDlpClient
@@ -238,6 +241,11 @@ public class YtDlpClient : IYtDlpClient
 
     private static string? GetStringProperty(JsonElement element, string propertyName)
     {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
         if (element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String)
         {
             return prop.GetString();
@@ -247,22 +255,69 @@ public class YtDlpClient : IYtDlpClient
 
     private static int GetIntProperty(JsonElement element, string propertyName)
     {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return 0;
+        }
+
         if (element.TryGetProperty(propertyName, out var prop))
         {
             if (prop.ValueKind == JsonValueKind.Number)
             {
-                return prop.GetInt32();
+                if (prop.TryGetInt32(out var intResult))
+                {
+                    return intResult;
+                }
+
+                if (prop.TryGetDouble(out var doubleResult))
+                {
+                    return ToInt32OrDefault(doubleResult);
+                }
             }
-            if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var result))
+            if (prop.ValueKind == JsonValueKind.String)
             {
-                return result;
+                var value = prop.GetString();
+                if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var intResult))
+                {
+                    return intResult;
+                }
+
+                if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var doubleResult))
+                {
+                    return ToInt32OrDefault(doubleResult);
+                }
             }
         }
         return 0;
     }
 
+    private static int ToInt32OrDefault(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            return 0;
+        }
+
+        if (value > int.MaxValue)
+        {
+            return int.MaxValue;
+        }
+
+        if (value < int.MinValue)
+        {
+            return int.MinValue;
+        }
+
+        return (int)Math.Round(value, MidpointRounding.AwayFromZero);
+    }
+
     private static string GetThumbnailUrl(JsonElement element)
     {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return "";
+        }
+
         // thumbnailプロパティを優先
         if (element.TryGetProperty("thumbnail", out var thumb) && thumb.ValueKind == JsonValueKind.String)
         {
@@ -357,48 +412,77 @@ public class YtDlpClient : IYtDlpClient
         var outputPath = Path.Combine(job.SaveFolderPath, template);
 
         var requestedFormat = NormalizeFormat(job.Format);
-        var arguments = BuildDownloadArguments(job, settings, outputPath, requestedFormat);
 
-        Debug.WriteLine($"yt-dlp: {ytDlpPath} {arguments}");
-        var (exitCode, stderr) = await RunDownloadProcessAsync(ytDlpPath, arguments, progress, cancellationToken);
+        // mp3 / wav は再エンコード(transcode)が走る。ffmpegに変換進捗をファイル出力させ、
+        // 動画長と突き合わせて「音声変換中」の実進捗を出すための一時ファイルを用意する。
+        // (m4aはコピーで一瞬／動画長が不明な場合は実進捗を出せないので対象外)
+        var durationSeconds = job.VideoMetadata.DurationSeconds;
+        string? conversionProgressFile = IsAudioFormat(requestedFormat) && requestedFormat != "m4a" && durationSeconds > 0
+            ? Path.Combine(Path.GetTempPath(), $"ytdlp_ffprog_{job.Id:N}.txt")
+            : null;
 
-        if (exitCode != 0)
+        var arguments = BuildDownloadArguments(job, settings, outputPath, requestedFormat, conversionProgressFile);
+
+        try
         {
-            // 403系は android client で再試行（web強制より成功率が高い）
-            if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
-                stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
+            Debug.WriteLine($"yt-dlp: {ytDlpPath} {arguments}");
+            var (exitCode, stderr) = await RunDownloadProcessAsync(ytDlpPath, arguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
+
+            if (exitCode != 0)
             {
-                var retryArguments = BuildAndroidRetryArguments(arguments, settings);
-
-                Debug.WriteLine($"yt-dlp retry(android): {ytDlpPath} {retryArguments}");
-                var (retryExitCode, retryStderr) = await RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, cancellationToken);
-
-                if (retryExitCode != 0)
+                // 403系は android client で再試行（web強制より成功率が高い）
+                if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
+                    stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new Exception($"ダウンロードに失敗しました: {retryStderr}");
+                    var retryArguments = BuildAndroidRetryArguments(arguments, settings);
+
+                    Debug.WriteLine($"yt-dlp retry(android): {ytDlpPath} {retryArguments}");
+                    var (retryExitCode, retryStderr) = await RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
+
+                    if (retryExitCode != 0)
+                    {
+                        throw new Exception($"ダウンロードに失敗しました: {retryStderr}");
+                    }
+                }
+                // NOTE: 上の分岐の "403" 判定が IsHttpForbidden の対象を包含しているため、現状この分岐には到達しない
+                else if (IsHttpForbidden(stderr))
+                {
+                    throw new Exception(
+                        "高画質形式のダウンロードが YouTube 側の 403 エラーで拒否されました。" +
+                        "360pへ自動低下しないよう停止しました。yt-dlp を最新版へ更新するか、" +
+                        "必要に応じて cookies / PO Token を設定してから再試行してください。");
+                }
+                else
+                {
+                    throw new Exception($"ダウンロードに失敗しました: {stderr}");
                 }
             }
-            // NOTE: 上の分岐の "403" 判定が IsHttpForbidden の対象を包含しているため、現状この分岐には到達しない
-            else if (IsHttpForbidden(stderr))
+
+            UpdateLocalFilePath(job, template);
+        }
+        finally
+        {
+            if (conversionProgressFile != null)
             {
-                throw new Exception(
-                    "高画質形式のダウンロードが YouTube 側の 403 エラーで拒否されました。" +
-                    "360pへ自動低下しないよう停止しました。yt-dlp を最新版へ更新するか、" +
-                    "必要に応じて cookies / PO Token を設定してから再試行してください。");
-            }
-            else
-            {
-                throw new Exception($"ダウンロードに失敗しました: {stderr}");
+                try
+                {
+                    if (File.Exists(conversionProgressFile))
+                    {
+                        File.Delete(conversionProgressFile);
+                    }
+                }
+                catch
+                {
+                    // 一時ファイルの削除失敗は無視
+                }
             }
         }
-
-        UpdateLocalFilePath(job, template);
     }
 
     /// <summary>
     /// ダウンロード用のyt-dlpコマンドライン引数を構築する
     /// </summary>
-    private static string BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat)
+    private static string BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat, string? conversionProgressFile = null)
     {
         var args = new StringBuilder();
 
@@ -411,11 +495,32 @@ public class YtDlpClient : IYtDlpClient
         // フォーマット指定
         if (IsAudioFormat(requestedFormat))
         {
-            // 音声のみ - bestaudioを取得して変換
-            args.Append("-f \"bestaudio/best\" ");
-            args.Append("-x ");
-            args.Append($"--audio-format {requestedFormat} ");
-            args.Append("--audio-quality 0 ");
+            if (requestedFormat == "m4a")
+            {
+                // m4aネイティブ(AAC)音源を最優先で選択する。
+                // 元がAACなら ExtractAudio が再エンコードせずコピーするため変換がほぼ一瞬で終わる。
+                // (--audio-quality はコピー時には無視されるため付与しない)
+                args.Append("-f \"bestaudio[ext=m4a]/bestaudio/best\" ");
+                args.Append("-x ");
+                args.Append("--audio-format m4a ");
+            }
+            else
+            {
+                // mp3 / wav は仕様上どうしても再エンコード(transcode)が発生する。
+                args.Append("-f \"bestaudio/best\" ");
+                args.Append("-x ");
+                args.Append($"--audio-format {requestedFormat} ");
+                args.Append($"--audio-quality {BuildAudioQualityArgument(job.Quality)} ");
+
+                // ExtractAudio(ffmpeg)に変換進捗を一時ファイルへ出力させ、実進捗を表示できるようにする。
+                // yt-dlpは --postprocessor-args の値を shlex 分割する際にバックスラッシュをエスケープとして
+                // 食ってしまうため、ffmpegへ渡すパスはスラッシュ区切りにする（Windowsでも有効）。
+                if (!string.IsNullOrEmpty(conversionProgressFile))
+                {
+                    var ffmpegProgressPath = conversionProgressFile.Replace('\\', '/');
+                    args.Append($"--postprocessor-args \"ExtractAudio:-progress \\\"{ffmpegProgressPath}\\\"\" ");
+                }
+            }
         }
         else
         {
@@ -446,6 +551,10 @@ public class YtDlpClient : IYtDlpClient
         // YouTube対策: User-Agent は指定するが、player_client=web の強制は
         // SABR でURLが欠落し「Requested format is not available」になり得るため行わない。
         args.Append("--user-agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" ");
+
+        // 分割配信(DASH/HLS)のフラグメントを並列ダウンロードして取得を高速化する。
+        // mp3/wav は再エンコードが避けられないぶん、ダウンロード時間を詰めて総時間を短縮する。
+        args.Append("--concurrent-fragments 4 ");
 
         // 進捗表示用
         args.Append("--newline ");
@@ -478,6 +587,39 @@ public class YtDlpClient : IYtDlpClient
         return retryArgs.ToString();
     }
 
+    private static string BuildAudioQualityArgument(string quality)
+    {
+        var normalized = quality.Trim();
+        return normalized switch
+        {
+            "最高 (VBR 0)" => "0",
+            "高音質 (VBR 2)" => "2",
+            "標準 (VBR 5)" => "5",
+            "軽量 (VBR 7)" => "7",
+            "最小 (VBR 10)" => "10",
+            _ => NormalizeAudioQualityArgument(normalized)
+        };
+    }
+
+    private static string NormalizeAudioQualityArgument(string quality)
+    {
+        if (int.TryParse(quality, NumberStyles.Integer, CultureInfo.InvariantCulture, out var vbrQuality) &&
+            vbrQuality is >= 0 and <= 10)
+        {
+            return vbrQuality.ToString(CultureInfo.InvariantCulture);
+        }
+
+        var bitrate = quality.ToUpperInvariant();
+        if (bitrate.EndsWith('K') &&
+            int.TryParse(bitrate[..^1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var kbps) &&
+            kbps > 0)
+        {
+            return $"{kbps}K";
+        }
+
+        return "5";
+    }
+
     /// <summary>
     /// yt-dlpのダウンロードプロセスを起動し、stdoutから進捗を報告しながら終了コードとstderrを返す。
     /// 初回実行と403リトライで共通。
@@ -486,6 +628,8 @@ public class YtDlpClient : IYtDlpClient
         string ytDlpPath,
         string arguments,
         IProgress<ProgressInfo>? progress,
+        string? conversionProgressFile,
+        int durationSeconds,
         CancellationToken cancellationToken)
     {
         var psi = new ProcessStartInfo
@@ -502,6 +646,25 @@ public class YtDlpClient : IYtDlpClient
 
         using var process = new Process { StartInfo = psi };
         process.Start();
+        using var killRegistration = cancellationToken.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+                // The process may already be gone.
+            }
+        });
+
+        // 変換進捗ポーラーのキャンセル制御（ExtractAudio開始時に起動する）
+        using var conversionPollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task? conversionPollTask = null;
+        var canTrackConversion = !string.IsNullOrEmpty(conversionProgressFile) && durationSeconds > 0;
 
         // 出力を読み取りながら進捗を報告
         var outputTask = Task.Run(async () =>
@@ -509,7 +672,22 @@ public class YtDlpClient : IYtDlpClient
             while (!process.StandardOutput.EndOfStream)
             {
                 var line = await process.StandardOutput.ReadLineAsync();
-                if (line != null && progress != null)
+                if (line == null)
+                {
+                    continue;
+                }
+
+                // 音声変換(ExtractAudio)開始を検知したら、ffmpegの進捗ファイルのポーリングを開始する。
+                // ポーラーが実進捗(%)を報告するので、この行自体は不確定表示にせず実進捗に委ねる。
+                if (canTrackConversion && conversionPollTask == null &&
+                    line.Contains("[ExtractAudio] Destination:"))
+                {
+                    conversionPollTask = PollConversionProgressAsync(conversionProgressFile!, durationSeconds, progress, conversionPollCts.Token);
+                    progress?.Report(new ProgressInfo { Percentage = 0, Status = "音声変換中...", IsPostProcessing = false });
+                    continue;
+                }
+
+                if (progress != null)
                 {
                     var progressInfo = ParseProgressLine(line);
                     if (progressInfo != null)
@@ -518,7 +696,7 @@ public class YtDlpClient : IYtDlpClient
                     }
                 }
             }
-        }, cancellationToken);
+        });
 
         var errorOutput = new StringBuilder();
         var errorTask = Task.Run(async () =>
@@ -531,12 +709,109 @@ public class YtDlpClient : IYtDlpClient
                     errorOutput.AppendLine(line);
                 }
             }
-        }, cancellationToken);
+        });
 
         await Task.WhenAll(outputTask, errorTask);
-        await process.WaitForExitAsync(cancellationToken);
+
+        // 変換ポーラーを停止して終了を待つ
+        conversionPollCts.Cancel();
+        if (conversionPollTask != null)
+        {
+            try
+            {
+                await conversionPollTask;
+            }
+            catch
+            {
+                // ポーラーの後始末で例外は無視
+            }
+        }
+
+        await process.WaitForExitAsync(CancellationToken.None);
+        cancellationToken.ThrowIfCancellationRequested();
 
         return (process.ExitCode, errorOutput.ToString());
+    }
+
+    /// <summary>
+    /// ExtractAudio(ffmpeg)が出力する進捗ファイルを定期的に読み、動画長と突き合わせて変換進捗(%)を報告する。
+    /// </summary>
+    private static async Task PollConversionProgressAsync(
+        string progressFile,
+        int durationSeconds,
+        IProgress<ProgressInfo>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (progress == null || durationSeconds <= 0)
+        {
+            return;
+        }
+
+        var totalMicroseconds = durationSeconds * 1_000_000.0;
+
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(300, cancellationToken);
+
+                var (outTimeMicroseconds, ended) = ReadFfmpegProgress(progressFile);
+                if (outTimeMicroseconds > 0)
+                {
+                    var percent = (int)Math.Clamp(outTimeMicroseconds / totalMicroseconds * 100.0, 0, 99);
+                    progress.Report(new ProgressInfo { Percentage = percent, Status = "音声変換中...", IsPostProcessing = false });
+                }
+
+                if (ended)
+                {
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常な停止
+        }
+        catch
+        {
+            // 進捗ファイルの読み取り失敗は無視（実進捗が出ないだけ）
+        }
+    }
+
+    /// <summary>
+    /// ffmpegの -progress 出力ファイルから最新の out_time(マイクロ秒) と終了フラグを読み取る。
+    /// </summary>
+    private static (long OutTimeMicroseconds, bool Ended) ReadFfmpegProgress(string progressFile)
+    {
+        try
+        {
+            using var stream = new FileStream(progressFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            long lastOutTime = 0;
+            var ended = false;
+            string? line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                if (line.StartsWith("out_time_us=", StringComparison.Ordinal))
+                {
+                    if (long.TryParse(line.AsSpan("out_time_us=".Length), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value > 0)
+                    {
+                        lastOutTime = value;
+                    }
+                }
+                else if (line.StartsWith("progress=end", StringComparison.Ordinal))
+                {
+                    ended = true;
+                }
+            }
+
+            return (lastOutTime, ended);
+        }
+        catch
+        {
+            return (0, false);
+        }
     }
 
     /// <summary>
@@ -794,9 +1069,9 @@ public class YtDlpClient : IYtDlpClient
                 var start = line.LastIndexOf(' ', percentIndex - 1) + 1;
                 if (start < 0) start = line.IndexOf(']') + 1;
                 var percentStr = line.Substring(start, percentIndex - start).Trim();
-                if (double.TryParse(percentStr, out var percent))
+                if (double.TryParse(percentStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var percent))
                 {
-                    progressInfo.Percentage = (int)percent;
+                    progressInfo.Percentage = Math.Clamp((int)Math.Floor(percent), 0, 99);
                 }
             }
 
@@ -820,9 +1095,24 @@ public class YtDlpClient : IYtDlpClient
             return new ProgressInfo { Status = "開始中...", Percentage = 0 };
         }
 
-        if (line.Contains("[Merger]") || line.Contains("[ffmpeg]"))
+        if (line.Contains("[ExtractAudio]") || line.Contains("[ffmpeg]"))
         {
-            return new ProgressInfo { Status = "変換中...", Percentage = 99 };
+            return new ProgressInfo { Status = "音声変換中...", Percentage = 99, IsPostProcessing = true };
+        }
+
+        if (line.Contains("[EmbedThumbnail]"))
+        {
+            return new ProgressInfo { Status = "サムネイル埋め込み中...", Percentage = 99, IsPostProcessing = true };
+        }
+
+        if (line.Contains("[Metadata]"))
+        {
+            return new ProgressInfo { Status = "メタデータ書き込み中...", Percentage = 99, IsPostProcessing = true };
+        }
+
+        if (line.Contains("[Merger]"))
+        {
+            return new ProgressInfo { Status = "変換中...", Percentage = 99, IsPostProcessing = true };
         }
 
         return null;

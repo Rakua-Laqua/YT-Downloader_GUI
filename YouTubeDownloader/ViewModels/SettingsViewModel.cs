@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -53,6 +54,9 @@ public partial class SettingsViewModel : ViewModelBase
     private string _defaultQuality = "best";
 
     [ObservableProperty]
+    private string _defaultAudioQuality = "標準 (VBR 5)";
+
+    [ObservableProperty]
     private bool _preferHighEfficiencyCodecs;
 
     [ObservableProperty]
@@ -84,6 +88,17 @@ public partial class SettingsViewModel : ViewModelBase
     public string[] VideoFormats { get; } = { "mp4", "mkv", "webm" };
     public string[] AudioFormats { get; } = { "mp3", "m4a", "wav" };
     public string[] Qualities { get; } = { "best", "1080p", "720p", "480p", "360p" };
+    public string[] AudioQualities { get; } =
+    {
+        "標準 (VBR 5)",
+        "高音質 (VBR 2)",
+        "最高 (VBR 0)",
+        "軽量 (VBR 7)",
+        "最小 (VBR 10)",
+        "128K",
+        "192K",
+        "256K"
+    };
     public string[] MetadataLanguages { get; } = { "ja", "en", "default", "ko", "zh-Hans", "zh-Hant", "es", "fr", "de" };
 
     #endregion
@@ -152,6 +167,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.DefaultVideoFormat = DefaultVideoFormat;
         _settings.DefaultAudioFormat = DefaultAudioFormat;
         _settings.DefaultQuality = DefaultQuality;
+        _settings.DefaultAudioQuality = DefaultAudioQuality;
         _settings.PreferHighEfficiencyCodecs = PreferHighEfficiencyCodecs;
         _settings.FilenameTemplate = FilenameTemplate;
 
@@ -208,6 +224,7 @@ public partial class SettingsViewModel : ViewModelBase
         DefaultVideoFormat = _settings.DefaultVideoFormat;
         DefaultAudioFormat = _settings.DefaultAudioFormat;
         DefaultQuality = _settings.DefaultQuality;
+        DefaultAudioQuality = NormalizeSelection(_settings.DefaultAudioQuality, AudioQualities, "標準 (VBR 5)");
         PreferHighEfficiencyCodecs = _settings.PreferHighEfficiencyCodecs;
         FilenameTemplate = _settings.FilenameTemplate;
 
@@ -285,5 +302,12 @@ public partial class SettingsViewModel : ViewModelBase
             .Replace("{index:02d}", "01");
 
         FilenamePreview = preview + ".mp4";
+    }
+
+    private static string NormalizeSelection(string? value, string[] candidates, string fallback)
+    {
+        return !string.IsNullOrWhiteSpace(value) && candidates.Contains(value)
+            ? value
+            : fallback;
     }
 }

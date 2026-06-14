@@ -34,6 +34,9 @@ public class AppSettings
     /// <summary>デフォルト品質</summary>
     public string DefaultQuality { get; set; } = "best";
 
+    /// <summary>デフォルト音声品質</summary>
+    public string DefaultAudioQuality { get; set; } = "標準 (VBR 5)";
+
     /// <summary>mp4でもAV1などの高効率コーデックを優先するか</summary>
     public bool PreferHighEfficiencyCodecs { get; set; }
 

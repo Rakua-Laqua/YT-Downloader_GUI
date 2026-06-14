@@ -75,24 +75,38 @@ public class DownloadManager : IDownloadManager, IDisposable
 
     private async Task ProcessJobAsync(DownloadJob job)
     {
-        await _semaphore.WaitAsync();
-
         var cts = new CancellationTokenSource();
+        var semaphoreAcquired = false;
         lock (_lock)
         {
             _cancellationTokens[job.Id] = cts;
+            if (job.Status == DownloadStatus.Canceled)
+            {
+                cts.Cancel();
+            }
         }
 
         try
         {
+            await _semaphore.WaitAsync(cts.Token);
+            semaphoreAcquired = true;
+            cts.Token.ThrowIfCancellationRequested();
+
             job.Status = DownloadStatus.Running;
             job.StartedAt = DateTime.Now;
             job.Progress = 0;
+            job.IsPostProcessing = false;
             JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
 
             var progress = new Progress<ProgressInfo>(info =>
             {
                 job.Progress = info.Percentage;
+                job.IsPostProcessing = info.IsPostProcessing;
+                if (!string.IsNullOrWhiteSpace(info.Status))
+                {
+                    job.StatusMessage = info.Status;
+                }
+
                 JobProgressChanged?.Invoke(this, new DownloadJobEventArgs(job));
             });
 
@@ -100,6 +114,8 @@ public class DownloadManager : IDownloadManager, IDisposable
 
             job.Status = DownloadStatus.Completed;
             job.Progress = 100;
+            job.IsPostProcessing = false;
+            job.StatusMessage = null;
             job.CompletedAt = DateTime.Now;
             job.VideoMetadata.DownloadedAt = DateTime.Now;
             job.VideoMetadata.Format = job.Format;
@@ -111,8 +127,12 @@ public class DownloadManager : IDownloadManager, IDisposable
         }
         catch (OperationCanceledException)
         {
+            var shouldNotify = job.Status != DownloadStatus.Canceled;
             job.Status = DownloadStatus.Canceled;
-            JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+            if (shouldNotify)
+            {
+                JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+            }
         }
         catch (Exception ex)
         {
@@ -127,7 +147,10 @@ public class DownloadManager : IDownloadManager, IDisposable
                 _cancellationTokens.Remove(job.Id);
             }
             cts.Dispose();
-            _semaphore.Release();
+            if (semaphoreAcquired)
+            {
+                _semaphore.Release();
+            }
         }
     }
 

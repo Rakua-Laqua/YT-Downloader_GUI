@@ -34,12 +34,22 @@ public partial class DownloadJobViewModel : ObservableObject
     private int _progress;
 
     [ObservableProperty]
+    private string? _statusMessage;
+
+    [ObservableProperty]
+    private bool _isPostProcessing;
+
+    [ObservableProperty]
     private string? _errorMessage;
 
     public string StatusText => Status switch
     {
         DownloadStatus.Pending => "待機中",
-        DownloadStatus.Running => $"ダウンロード中 ({Progress}%)",
+        // 後処理(変換・埋め込み)はパーセンテージが取れないので「%」を出さない
+        DownloadStatus.Running when IsPostProcessing => StatusMessage ?? "変換中...",
+        DownloadStatus.Running => !string.IsNullOrWhiteSpace(StatusMessage)
+            ? $"{StatusMessage} ({Progress}%)"
+            : $"ダウンロード中 ({Progress}%)",
         DownloadStatus.Completed => "完了",
         DownloadStatus.Failed => $"失敗: {ErrorMessage ?? "不明なエラー"}",
         DownloadStatus.Canceled => "キャンセル",
@@ -65,6 +75,8 @@ public partial class DownloadJobViewModel : ObservableObject
     {
         Status = _job.Status;
         Progress = _job.Progress;
+        StatusMessage = _job.StatusMessage;
+        IsPostProcessing = _job.IsPostProcessing;
         ErrorMessage = _job.ErrorMessage;
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(CanCancel));

@@ -52,6 +52,12 @@ public class DownloadJob
     /// <summary>進捗（0-100）</summary>
     public int Progress { get; set; }
 
+    /// <summary>実行中の詳細ステータス</summary>
+    public string? StatusMessage { get; set; }
+
+    /// <summary>変換・埋め込みなどの後処理フェーズ中か（進捗バーを不確定表示にするため）</summary>
+    public bool IsPostProcessing { get; set; }
+
     /// <summary>エラーメッセージ</summary>
     public string? ErrorMessage { get; set; }
 
