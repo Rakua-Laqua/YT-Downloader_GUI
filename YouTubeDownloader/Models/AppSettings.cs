@@ -17,6 +17,12 @@ public class AppSettings
     /// <summary>yt-dlpを初回利用前に自動更新するか</summary>
     public bool AutoUpdateYtDlp { get; set; } = true;
 
+    /// <summary>
+    /// yt-dlpの更新チャンネル（"stable" または "nightly"）。
+    /// プレイリスト取得などの不具合がstableで未修正の場合に nightly を選べるようにする。
+    /// </summary>
+    public string YtDlpUpdateChannel { get; set; } = "stable";
+
     /// <summary>動画タイトルなどのメタデータ取得に使う既定言語</summary>
     public string DefaultMetadataLanguage { get; set; } = "ja";
 

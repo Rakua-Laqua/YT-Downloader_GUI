@@ -34,22 +34,98 @@ public class DownloadManager : IDownloadManager, IDisposable
 {
     private readonly IYtDlpClient _ytDlpClient;
     private readonly IMetadataRepository _metadataRepository;
+    private readonly ISettingsRepository _settingsRepository;
     private readonly ConcurrentQueue<DownloadJob> _pendingQueue = new();
     private readonly List<DownloadJob> _allJobs = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _cancellationTokens = new();
     private readonly SemaphoreSlim _semaphore;
     private readonly object _lock = new();
-    private const int MaxConcurrency = 2;
+
+    /// <summary>同時ダウンロード数の許容範囲</summary>
+    public const int MinConcurrency = 1;
+    public const int MaxConcurrencyLimit = 8;
+
+    /// <summary>現在有効な同時ダウンロード数（設定保存で動的に変わる）</summary>
+    private int _maxConcurrency;
     private bool _disposed;
 
     public event EventHandler<DownloadJobEventArgs>? JobProgressChanged;
     public event EventHandler<DownloadJobEventArgs>? JobStatusChanged;
 
-    public DownloadManager(IYtDlpClient ytDlpClient, IMetadataRepository metadataRepository)
+    public DownloadManager(IYtDlpClient ytDlpClient, IMetadataRepository metadataRepository, ISettingsRepository settingsRepository)
     {
         _ytDlpClient = ytDlpClient;
         _metadataRepository = metadataRepository;
-        _semaphore = new SemaphoreSlim(MaxConcurrency, MaxConcurrency);
+        _settingsRepository = settingsRepository;
+
+        _maxConcurrency = ClampConcurrency(_settingsRepository.Load().MaxConcurrentDownloads);
+        // 動的に許可数を増減できるよう、上限を固定しない形で生成する
+        _semaphore = new SemaphoreSlim(_maxConcurrency);
+
+        _settingsRepository.SettingsSaved += OnSettingsSaved;
+    }
+
+    public static int ClampConcurrency(int value)
+    {
+        if (value < MinConcurrency) return MinConcurrency;
+        if (value > MaxConcurrencyLimit) return MaxConcurrencyLimit;
+        return value;
+    }
+
+    private void OnSettingsSaved(object? sender, AppSettings settings)
+    {
+        ApplyMaxConcurrency(ClampConcurrency(settings.MaxConcurrentDownloads));
+    }
+
+    /// <summary>
+    /// 同時実行数を動的に変更する。実行中のジョブは中断せず、以降のジョブ開始から新しい上限が効く。
+    /// SemaphoreSlimは生成後にサイズ変更できないため、許可数の増減で実現する：
+    /// 増やす場合は Release、減らす場合は空いた許可を吸収して新規開始を抑制する。
+    /// </summary>
+    private void ApplyMaxConcurrency(int newMax)
+    {
+        int delta;
+        lock (_lock)
+        {
+            if (_disposed || newMax == _maxConcurrency)
+            {
+                return;
+            }
+            delta = newMax - _maxConcurrency;
+            _maxConcurrency = newMax;
+        }
+
+        if (delta > 0)
+        {
+            try
+            {
+                _semaphore.Release(delta);
+            }
+            catch (ObjectDisposedException)
+            {
+                // 破棄済みなら何もしない
+            }
+        }
+        else
+        {
+            for (var i = 0; i < -delta; i++)
+            {
+                _ = AbsorbPermitAsync();
+            }
+        }
+    }
+
+    /// <summary>許可を1つ取得したまま解放しないことで、実効的な同時実行上限を1下げる</summary>
+    private async Task AbsorbPermitAsync()
+    {
+        try
+        {
+            await _semaphore.WaitAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 破棄済みなら何もしない
+        }
     }
 
     public IReadOnlyList<DownloadJob> GetAllJobs()
@@ -236,6 +312,8 @@ public class DownloadManager : IDownloadManager, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        _settingsRepository.SettingsSaved -= OnSettingsSaved;
 
         lock (_lock)
         {

@@ -85,6 +85,16 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private string _ytDlpUpdateStatus = string.Empty;
 
+    /// <summary>yt-dlpの更新チャンネル（"stable" / "nightly"）</summary>
+    [ObservableProperty]
+    private string _ytDlpUpdateChannel = "stable";
+
+    /// <summary>現在インストールされているyt-dlpのバージョン表示</summary>
+    [ObservableProperty]
+    private string _ytDlpVersion = "確認中...";
+
+    public string[] UpdateChannels { get; } = { "stable", "nightly" };
+
     public string[] VideoFormats { get; } = { "mp4", "mkv", "webm" };
     public string[] AudioFormats { get; } = { "mp3", "m4a", "wav" };
     public string[] Qualities { get; } = { "best", "1080p", "720p", "480p", "360p" };
@@ -100,6 +110,14 @@ public partial class SettingsViewModel : ViewModelBase
         "256K"
     };
     public string[] MetadataLanguages { get; } = { "ja", "en", "default", "ko", "zh-Hans", "zh-Hant", "es", "fr", "de" };
+
+    /// <summary>同時ダウンロード数</summary>
+    [ObservableProperty]
+    private int _maxConcurrentDownloads = 2;
+
+    /// <summary>同時ダウンロード数の選択肢（DownloadManagerの許容範囲に合わせる）</summary>
+    public int[] ConcurrencyOptions { get; } =
+        Enumerable.Range(DownloadManager.MinConcurrency, DownloadManager.MaxConcurrencyLimit - DownloadManager.MinConcurrency + 1).ToArray();
 
     #endregion
 
@@ -160,6 +178,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.YtDlpPath = YtDlpPath;
         _settings.FfmpegPath = FfmpegPath;
         _settings.AutoUpdateYtDlp = AutoUpdateYtDlp;
+        _settings.YtDlpUpdateChannel = NormalizeSelection(YtDlpUpdateChannel, UpdateChannels, "stable");
         _settings.DefaultMetadataLanguage = string.IsNullOrWhiteSpace(DefaultMetadataLanguage)
             ? "ja"
             : DefaultMetadataLanguage.Trim();
@@ -170,6 +189,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.DefaultAudioQuality = DefaultAudioQuality;
         _settings.PreferHighEfficiencyCodecs = PreferHighEfficiencyCodecs;
         _settings.FilenameTemplate = FilenameTemplate;
+        _settings.MaxConcurrentDownloads = DownloadManager.ClampConcurrency(MaxConcurrentDownloads);
 
         await _settingsRepository.SaveAsync(_settings);
 
@@ -180,13 +200,15 @@ public partial class SettingsViewModel : ViewModelBase
     private async Task UpdateYtDlpAsync()
     {
         IsUpdatingYtDlp = true;
-        YtDlpUpdateStatus = "yt-dlpを更新しています...";
+        var channel = NormalizeSelection(YtDlpUpdateChannel, UpdateChannels, "stable");
+        YtDlpUpdateStatus = $"yt-dlpを更新しています...（{channel}）";
 
         try
         {
-            var result = await _ytDlpClient.UpdateYtDlpAsync();
+            var result = await _ytDlpClient.UpdateYtDlpAsync(channel);
             YtDlpUpdateStatus = result.Message;
             ValidatePaths();
+            await RefreshYtDlpVersionAsync();
 
             if (!result.IsSuccess)
             {
@@ -217,6 +239,7 @@ public partial class SettingsViewModel : ViewModelBase
         YtDlpPath = _settings.YtDlpPath;
         FfmpegPath = _settings.FfmpegPath;
         AutoUpdateYtDlp = _settings.AutoUpdateYtDlp;
+        YtDlpUpdateChannel = NormalizeSelection(_settings.YtDlpUpdateChannel, UpdateChannels, "stable");
         DefaultMetadataLanguage = string.IsNullOrWhiteSpace(_settings.DefaultMetadataLanguage)
             ? "ja"
             : _settings.DefaultMetadataLanguage;
@@ -227,10 +250,21 @@ public partial class SettingsViewModel : ViewModelBase
         DefaultAudioQuality = NormalizeSelection(_settings.DefaultAudioQuality, AudioQualities, "標準 (VBR 5)");
         PreferHighEfficiencyCodecs = _settings.PreferHighEfficiencyCodecs;
         FilenameTemplate = _settings.FilenameTemplate;
+        MaxConcurrentDownloads = DownloadManager.ClampConcurrency(_settings.MaxConcurrentDownloads);
 
         ValidatePaths();
         YtDlpUpdateStatus = AutoUpdateYtDlp ? "初回利用前に自動更新します。" : "自動更新は無効です。";
         UpdateFilenamePreview();
+        _ = RefreshYtDlpVersionAsync();
+    }
+
+    /// <summary>現在インストールされているyt-dlpのバージョンを取得して表示する</summary>
+    private async Task RefreshYtDlpVersionAsync()
+    {
+        var version = await _ytDlpClient.GetYtDlpVersionAsync();
+        YtDlpVersion = string.IsNullOrWhiteSpace(version)
+            ? "未検出"
+            : version!;
     }
 
     private void ValidatePaths()
