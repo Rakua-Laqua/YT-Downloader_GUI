@@ -100,6 +100,14 @@ public partial class DownloadViewModel : ViewModelBase
     [ObservableProperty]
     private int _videoCount;
 
+    /// <summary>取得できた件数がYouTube上の総数より少ない（取得漏れ）かどうか</summary>
+    [ObservableProperty]
+    private bool _isPlaylistTruncated;
+
+    /// <summary>取得漏れ時に表示する警告文</summary>
+    [ObservableProperty]
+    private string _truncationWarningText = string.Empty;
+
     [ObservableProperty]
     private string? _duration;
 
@@ -171,6 +179,8 @@ public partial class DownloadViewModel : ViewModelBase
 
         IsAnalyzing = true;
         HasAnalyzedResult = false;
+        IsPlaylistTruncated = false;
+        TruncationWarningText = string.Empty;
         _currentVideo = null;
         _currentPlaylist = null;
         PlaylistItems.Clear();
@@ -197,6 +207,16 @@ public partial class DownloadViewModel : ViewModelBase
                 ChannelName = result.PlaylistMetadata.Channel;
                 VideoCount = result.PlaylistMetadata.VideoCount;
                 Duration = null;
+
+                // YouTube上の総数より取得できた件数が少ない場合は警告を表示する。
+                // 主な原因は古いyt-dlpのプレイリスト・ページネーション不具合（nightlyで改善する場合あり）。
+                if (result.PlaylistMetadata.IsTruncated)
+                {
+                    IsPlaylistTruncated = true;
+                    TruncationWarningText =
+                        $"YouTube上の {result.PlaylistMetadata.TotalVideoCount} 本中 {result.PlaylistMetadata.VideoCount} 本のみ取得できました。" +
+                        "残りは取得できていません。設定画面でyt-dlpを最新（nightly）に更新すると改善する場合があります。";
+                }
 
                 foreach (var video in result.PlaylistMetadata.Videos)
                 {

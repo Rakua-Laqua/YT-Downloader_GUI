@@ -17,7 +17,8 @@ namespace YouTubeDownloader.Services;
 public interface IYtDlpClient
 {
     Task<YtDlpAnalyzeResult> AnalyzeUrlAsync(string url, CancellationToken cancellationToken = default);
-    Task<YtDlpUpdateResult> UpdateYtDlpAsync(CancellationToken cancellationToken = default);
+    Task<YtDlpUpdateResult> UpdateYtDlpAsync(string? channelOverride = null, CancellationToken cancellationToken = default);
+    Task<string?> GetYtDlpVersionAsync(CancellationToken cancellationToken = default);
     Task DownloadAsync(DownloadJob job, IProgress<ProgressInfo>? progress, CancellationToken cancellationToken = default);
 }
 
@@ -187,6 +188,11 @@ public class YtDlpClient : IYtDlpClient
 
             playlist.Videos = videos;
             playlist.VideoCount = videos.Count;
+
+            // YouTube上の総数(playlist_count)。取得できなければ実取得数にそろえる。
+            // 実取得数より大きい場合は「取得漏れ」(古いyt-dlpのページネーション不具合など)を意味する。
+            var totalCount = GetIntProperty(root, "playlist_count");
+            playlist.TotalVideoCount = totalCount > videos.Count ? totalCount : videos.Count;
 
             return new YtDlpAnalyzeResult
             {
@@ -919,14 +925,18 @@ public class YtDlpClient : IYtDlpClient
                stderr.Contains("403: Forbidden", StringComparison.OrdinalIgnoreCase);
     }
 
-    public async Task<YtDlpUpdateResult> UpdateYtDlpAsync(CancellationToken cancellationToken = default)
+    public async Task<YtDlpUpdateResult> UpdateYtDlpAsync(string? channelOverride = null, CancellationToken cancellationToken = default)
     {
         var ytDlpPath = GetYtDlpPath();
+
+        // 設定保存前でもUIで選択中のチャンネルで更新できるよう、明示指定があればそれを優先する。
+        var channel = NormalizeUpdateChannel(
+            !string.IsNullOrWhiteSpace(channelOverride) ? channelOverride : _settingsRepository.Load().YtDlpUpdateChannel);
 
         await _ytDlpUpdateLock.WaitAsync(cancellationToken);
         try
         {
-            var result = await RunYtDlpUpdateAsync(ytDlpPath, cancellationToken);
+            var result = await RunYtDlpUpdateAsync(ytDlpPath, channel, cancellationToken);
             _hasCheckedYtDlpUpdate = true;
             return result;
         }
@@ -934,6 +944,28 @@ public class YtDlpClient : IYtDlpClient
         {
             _ytDlpUpdateLock.Release();
         }
+    }
+
+    public async Task<string?> GetYtDlpVersionAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var ytDlpPath = GetYtDlpPath();
+            var output = await RunYtDlpAsync(ytDlpPath, "--version", cancellationToken);
+            return string.IsNullOrWhiteSpace(output) ? null : output.Trim();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>更新チャンネル文字列を "stable" / "nightly" のいずれかに正規化する</summary>
+    private static string NormalizeUpdateChannel(string? channel)
+    {
+        return string.Equals(channel?.Trim(), "nightly", StringComparison.OrdinalIgnoreCase)
+            ? "nightly"
+            : "stable";
     }
 
     private async Task EnsureYtDlpUpdatedAsync(string ytDlpPath, CancellationToken cancellationToken)
@@ -952,7 +984,8 @@ public class YtDlpClient : IYtDlpClient
                 return;
             }
 
-            var result = await RunYtDlpUpdateAsync(ytDlpPath, cancellationToken);
+            var channel = NormalizeUpdateChannel(settings.YtDlpUpdateChannel);
+            var result = await RunYtDlpUpdateAsync(ytDlpPath, channel, cancellationToken);
             _hasCheckedYtDlpUpdate = true;
 
             if (!result.IsSuccess)
@@ -966,12 +999,14 @@ public class YtDlpClient : IYtDlpClient
         }
     }
 
-    private static async Task<YtDlpUpdateResult> RunYtDlpUpdateAsync(string ytDlpPath, CancellationToken cancellationToken)
+    private static async Task<YtDlpUpdateResult> RunYtDlpUpdateAsync(string ytDlpPath, string channel, CancellationToken cancellationToken)
     {
+        // --update-to <channel> は stable/nightly 間の切り替え（ダウングレード含む）に対応する。
+        // 単なる -U は現在のチャンネル内でしか更新しないため、nightlyへ切り替えるにはこちらを使う。
         var psi = new ProcessStartInfo
         {
             FileName = ytDlpPath,
-            Arguments = "-U",
+            Arguments = $"--update-to {channel}",
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -1003,16 +1038,17 @@ public class YtDlpClient : IYtDlpClient
 
     private static string BuildUpdateSuccessMessage(string output)
     {
-        if (output.Contains("is up to date", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("Latest version", StringComparison.OrdinalIgnoreCase))
-        {
-            return "yt-dlpは最新です。";
-        }
-
-        if (output.Contains("Updated", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("Updating", StringComparison.OrdinalIgnoreCase))
+        // 注意: --update-to の出力には常に "Latest version:" 行が含まれるため、
+        // 「更新した」判定(Updated/Updating)を先に行う必要がある。
+        if (output.Contains("Updated yt-dlp", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Updating to", StringComparison.OrdinalIgnoreCase))
         {
             return "yt-dlpを更新しました。";
+        }
+
+        if (output.Contains("is up to date", StringComparison.OrdinalIgnoreCase))
+        {
+            return "yt-dlpは最新です。";
         }
 
         return "yt-dlpの更新チェックが完了しました。";

@@ -102,6 +102,19 @@
                     </Grid>
                 </Border>
 
+                <!-- 取得漏れ警告 -->
+                <Border Visibility="{Binding IsPlaylistTruncated, Converter={StaticResource BoolToVis}}"
+                        Background="#FFF8E1" BorderBrush="#FFD54F" BorderThickness="1"
+                        CornerRadius="6" Padding="12,10" Margin="0,10,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#x26A0;" FontSize="16" Foreground="#F9A825"
+                                   VerticalAlignment="Top" Margin="0,0,8,0"/>
+                        <TextBlock Text="{Binding TruncationWarningText}"
+                                   Foreground="#8D6E00" TextWrapping="Wrap"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+
                 <!-- プレイリストアイテム選択 -->
                 <Border Visibility="{Binding IsPlaylist, Converter={StaticResource BoolToVis}}"
                         Margin="0,10,0,0">
