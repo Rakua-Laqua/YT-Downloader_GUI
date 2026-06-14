@@ -22,8 +22,14 @@ public partial class DownloadViewModel : ViewModelBase
     private readonly IYtDlpClient _ytDlpClient;
     private readonly IDownloadManager _downloadManager;
     private readonly ISettingsRepository _settingsRepository;
+    private string _defaultVideoFormat = "mp4";
+    private string _defaultAudioFormat = "mp3";
+    private string _defaultVideoQuality = "best";
     private DateTime _lastTaskbarFlashAt = DateTime.MinValue;
     private bool _hasFlashedForAllCompleted;
+    private string _lastVideoQuality = "best";
+    private string _lastAudioQuality = "標準 (VBR 5)";
+    private bool _pendingDefaultsApply;
 
     public DownloadViewModel(
         IYtDlpClient ytDlpClient,
@@ -39,9 +45,13 @@ public partial class DownloadViewModel : ViewModelBase
 
         // 設定を読み込み
         var settings = _settingsRepository.Load();
+        LoadDefaultsFrom(settings);
         _saveFolderPath = settings.DefaultSaveFolder;
-        _selectedFormat = settings.DefaultVideoFormat;
-        _selectedQuality = settings.DefaultQuality;
+        _selectedFormat = _defaultVideoFormat;
+        _selectedQuality = _defaultVideoQuality;
+
+        // 設定画面で保存されたら既定値を同期する
+        _settingsRepository.SettingsSaved += OnSettingsSaved;
 
         // ダウンロードキューを復元
         foreach (var job in _downloadManager.GetAllJobs())
@@ -108,15 +118,42 @@ public partial class DownloadViewModel : ViewModelBase
 
     public string[] VideoFormats { get; } = { "mp4", "mkv", "webm" };
     public string[] AudioFormats { get; } = { "mp3", "m4a", "wav" };
-    public string[] Qualities { get; } = { "best", "1080p", "720p", "480p", "360p" };
+    public string[] VideoQualities { get; } = { "best", "1080p", "720p", "480p", "360p" };
+    public string[] AudioQualities { get; } =
+    {
+        "標準 (VBR 5)",
+        "高音質 (VBR 2)",
+        "最高 (VBR 0)",
+        "軽量 (VBR 7)",
+        "最小 (VBR 10)",
+        "128K",
+        "192K",
+        "256K"
+    };
+    public string[] Qualities => VideoQualities;
 
     public string[] CurrentFormats => IsAudioOnly ? AudioFormats : VideoFormats;
+    public string[] CurrentQualities => IsAudioOnly ? AudioQualities : VideoQualities;
 
     partial void OnIsAudioOnlyChanged(bool value)
     {
         // フォーマットを適切なデフォルトに変更
-        SelectedFormat = value ? "mp3" : "mp4";
+        SelectedFormat = value ? _defaultAudioFormat : _defaultVideoFormat;
+        SelectedQuality = value ? _lastAudioQuality : _lastVideoQuality;
         OnPropertyChanged(nameof(CurrentFormats));
+        OnPropertyChanged(nameof(CurrentQualities));
+    }
+
+    partial void OnSelectedQualityChanged(string value)
+    {
+        if (IsAudioOnly)
+        {
+            _lastAudioQuality = value;
+        }
+        else
+        {
+            _lastVideoQuality = value;
+        }
     }
 
     #endregion
@@ -147,6 +184,9 @@ public partial class DownloadViewModel : ViewModelBase
                 MessageBox.Show(result.ErrorMessage ?? "解析に失敗しました。", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
+
+            // 設定が更新されていれば、この解析からフォーマット/品質の既定値を反映する
+            ApplyPendingDefaultsIfNeeded();
 
             if (result.IsPlaylist && result.PlaylistMetadata != null)
             {
@@ -216,7 +256,15 @@ public partial class DownloadViewModel : ViewModelBase
             return;
         }
 
-        Directory.CreateDirectory(SaveFolderPath);
+        try
+        {
+            Directory.CreateDirectory(SaveFolderPath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"保存先フォルダを作成できませんでした: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
 
         if (IsPlaylist && _currentPlaylist != null)
         {
@@ -430,5 +478,57 @@ public partial class DownloadViewModel : ViewModelBase
             name = name.Replace(c, '_');
         }
         return name;
+    }
+
+    private static string NormalizeSelection(string? value, string[] candidates, string fallback)
+    {
+        return !string.IsNullOrWhiteSpace(value) && candidates.Contains(value)
+            ? value
+            : fallback;
+    }
+
+    /// <summary>設定からフォーマット/品質の既定値を読み込む</summary>
+    private void LoadDefaultsFrom(AppSettings settings)
+    {
+        _defaultVideoFormat = NormalizeSelection(settings.DefaultVideoFormat, VideoFormats, "mp4");
+        _defaultAudioFormat = NormalizeSelection(settings.DefaultAudioFormat, AudioFormats, "mp3");
+        _defaultVideoQuality = NormalizeSelection(settings.DefaultQuality, VideoQualities, "best");
+        _lastVideoQuality = _defaultVideoQuality;
+        _lastAudioQuality = NormalizeSelection(settings.DefaultAudioQuality, AudioQualities, "標準 (VBR 5)");
+    }
+
+    private void OnSettingsSaved(object? sender, AppSettings settings)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher != null && !dispatcher.CheckAccess())
+        {
+            dispatcher.Invoke(() => ApplySettings(settings));
+        }
+        else
+        {
+            ApplySettings(settings);
+        }
+    }
+
+    /// <summary>
+    /// 設定保存時に既定値を再読込する。表示中の選択は変更せず、次回のURL解析時に新しい既定値を適用する。
+    /// </summary>
+    private void ApplySettings(AppSettings settings)
+    {
+        LoadDefaultsFrom(settings);
+        _pendingDefaultsApply = true;
+    }
+
+    /// <summary>設定変更後の最初の解析時に、フォーマット/品質を新しい既定値へ揃える</summary>
+    private void ApplyPendingDefaultsIfNeeded()
+    {
+        if (!_pendingDefaultsApply)
+        {
+            return;
+        }
+
+        _pendingDefaultsApply = false;
+        SelectedFormat = IsAudioOnly ? _defaultAudioFormat : _defaultVideoFormat;
+        SelectedQuality = IsAudioOnly ? _lastAudioQuality : _lastVideoQuality;
     }
 }

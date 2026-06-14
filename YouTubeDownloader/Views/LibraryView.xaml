@@ -4,16 +4,19 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:vm="clr-namespace:YouTubeDownloader.ViewModels"
-             mc:Ignorable="d" 
+             xmlns:inf="clr-namespace:YouTubeDownloader.Infrastructure"
+             mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="900"
              d:DataContext="{d:DesignInstance Type=vm:LibraryViewModel}">
 
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <inf:ThumbnailImageConverter x:Key="ThumbToImage"/>
     </UserControl.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
@@ -48,8 +51,39 @@
             </Grid>
         </Border>
 
+        <!-- ツールバー: 一括選択 / 一括削除 / 件数表示 -->
+        <Grid Grid.Row="1" Margin="2,0,2,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="0"
+                    Content="全選択"
+                    Command="{Binding SelectAllCommand}"
+                    Padding="14,7" FontSize="13"/>
+            <Button Grid.Column="1"
+                    Content="選択解除"
+                    Command="{Binding ClearSelectionCommand}"
+                    Padding="14,7" Margin="8,0,0,0" FontSize="13"/>
+            <Button Grid.Column="2"
+                    Content="選択削除"
+                    Command="{Binding DeleteSelectedCommand}"
+                    Padding="14,7" Margin="8,0,0,0" FontSize="13"
+                    Foreground="Red"
+                    ToolTip="選択した項目を履歴から削除します (Del)"/>
+
+            <TextBlock Grid.Column="4"
+                       Text="{Binding CountSummaryText}"
+                       VerticalAlignment="Center"
+                       FontSize="13" Foreground="#555"/>
+        </Grid>
+
         <!-- ビジー表示 -->
-        <Border Grid.Row="1" Background="#80000000" 
+        <Border Grid.Row="2" Background="#80000000"
                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
                 Panel.ZIndex="100">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -58,7 +92,7 @@
         </Border>
 
         <!-- ライブラリ一覧 -->
-        <Border Grid.Row="1" Background="#F5F5F5" Padding="10" CornerRadius="8">
+        <Border Grid.Row="2" Background="#F5F5F5" Padding="10" CornerRadius="8">
             <DataGrid ItemsSource="{Binding Items}"
                       SelectedItem="{Binding SelectedItem}"
                       AutoGenerateColumns="False"
@@ -67,15 +101,43 @@
                       GridLinesVisibility="Horizontal"
                       Background="White"
                       BorderThickness="0"
-                      RowHeight="60">
+                      RowHeight="60"
+                      EnableRowVirtualization="True"
+                      EnableColumnVirtualization="True"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      VirtualizingPanel.ScrollUnit="Pixel"
+                      ScrollViewer.CanContentScroll="True">
+                <DataGrid.InputBindings>
+                    <!-- Del キーで選択(チェック)した項目を一括削除 -->
+                    <KeyBinding Key="Delete" Command="{Binding DeleteSelectedCommand}"/>
+                </DataGrid.InputBindings>
                 <DataGrid.Columns>
+                    <!-- 選択チェックボックス -->
+                    <DataGridTemplateColumn Width="40" CanUserResize="False" CanUserReorder="False" CanUserSort="False">
+                        <DataGridTemplateColumn.Header>
+                            <CheckBox IsThreeState="True"
+                                      HorizontalAlignment="Center"
+                                      ToolTip="すべて選択 / 解除"
+                                      IsChecked="{Binding DataContext.AreAllSelected, RelativeSource={RelativeSource AncestorType=DataGrid}, Mode=TwoWay}"/>
+                        </DataGridTemplateColumn.Header>
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          IsChecked="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+
                     <!-- サムネイル -->
                     <DataGridTemplateColumn Header="" Width="80">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Border CornerRadius="3" ClipToBounds="True"
                                         Background="#EEE" Width="70" Height="40" Margin="5">
-                                    <Image Source="{Binding ThumbnailUrl}" Stretch="UniformToFill"/>
+                                    <Image Source="{Binding ThumbnailUrl, Converter={StaticResource ThumbToImage}}"
+                                           Stretch="UniformToFill"
+                                           RenderOptions.BitmapScalingMode="LowQuality"/>
                                 </Border>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -169,11 +231,11 @@
         </Border>
 
         <!-- 空の状態 -->
-        <TextBlock Grid.Row="1"
+        <TextBlock Grid.Row="2"
                    Text="ライブラリにアイテムがありません"
                    Foreground="Gray" FontSize="14"
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
-                   Visibility="{Binding Items.Count, Converter={StaticResource BoolToVis}, ConverterParameter=Inverted}"/>
+                   Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVis}}"/>
     </Grid>
 </UserControl>

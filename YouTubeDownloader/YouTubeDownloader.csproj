@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <PostBuildCopyOutputDir>C:\Users\Rakua\Documents\自作アプリ\YouTubeDownloader-win-x64</PostBuildCopyOutputDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,5 +14,19 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.1" />
     <PackageReference Include="System.Text.Json" Version="10.0.1" />
   </ItemGroup>
+
+  <Target Name="CopyBuildOutputToConfiguredFolder"
+          AfterTargets="Build"
+          Condition="'$(PostBuildCopyOutputDir)' != '' and Exists('$(TargetDir)')">
+    <ItemGroup>
+      <PostBuildCopyFiles Include="$(TargetDir)**\*" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(PostBuildCopyOutputDir)" />
+    <Copy SourceFiles="@(PostBuildCopyFiles)"
+          DestinationFiles="@(PostBuildCopyFiles->'$(PostBuildCopyOutputDir)\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="false"
+          OverwriteReadOnlyFiles="true" />
+  </Target>
 
 </Project>

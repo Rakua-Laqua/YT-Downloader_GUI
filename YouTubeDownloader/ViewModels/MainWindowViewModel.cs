@@ -27,6 +27,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private DownloadViewModel? _downloadViewModel;
     private LibraryViewModel? _libraryViewModel;
     private SettingsViewModel? _settingsViewModel;
+    private bool _isSyncingSelectedNavigation;
 
     public MainWindowViewModel(
         Func<DownloadViewModel> downloadViewModelFactory,
@@ -38,7 +39,8 @@ public partial class MainWindowViewModel : ViewModelBase
         _settingsViewModelFactory = settingsViewModelFactory;
 
         // 初期画面はダウンロード
-        NavigateToDownload();
+        _downloadViewModel = _downloadViewModelFactory();
+        CurrentView = _downloadViewModel;
     }
 
     [ObservableProperty]
@@ -50,25 +52,63 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void NavigateToDownload()
     {
-        _downloadViewModel ??= _downloadViewModelFactory();
-        CurrentView = _downloadViewModel;
-        SelectedNavigation = NavigationItem.Download;
+        _ = ApplyNavigationAsync(NavigationItem.Download);
     }
 
     [RelayCommand]
     private async Task NavigateToLibraryAsync()
     {
-        _libraryViewModel ??= _libraryViewModelFactory();
-        CurrentView = _libraryViewModel;
-        SelectedNavigation = NavigationItem.Library;
-        await _libraryViewModel.LoadAsync();
+        await ApplyNavigationAsync(NavigationItem.Library);
     }
 
     [RelayCommand]
     private void NavigateToSettings()
     {
-        _settingsViewModel ??= _settingsViewModelFactory();
-        CurrentView = _settingsViewModel;
-        SelectedNavigation = NavigationItem.Settings;
+        _ = ApplyNavigationAsync(NavigationItem.Settings);
+    }
+
+    partial void OnSelectedNavigationChanged(NavigationItem value)
+    {
+        if (_isSyncingSelectedNavigation)
+        {
+            return;
+        }
+
+        _ = ApplyNavigationAsync(value);
+    }
+
+    private async Task ApplyNavigationAsync(NavigationItem navigation)
+    {
+        if (SelectedNavigation != navigation)
+        {
+            _isSyncingSelectedNavigation = true;
+            try
+            {
+                SelectedNavigation = navigation;
+            }
+            finally
+            {
+                _isSyncingSelectedNavigation = false;
+            }
+        }
+
+        switch (navigation)
+        {
+            case NavigationItem.Download:
+                _downloadViewModel ??= _downloadViewModelFactory();
+                CurrentView = _downloadViewModel;
+                break;
+
+            case NavigationItem.Library:
+                _libraryViewModel ??= _libraryViewModelFactory();
+                CurrentView = _libraryViewModel;
+                await _libraryViewModel.LoadAsync();
+                break;
+
+            case NavigationItem.Settings:
+                _settingsViewModel ??= _settingsViewModelFactory();
+                CurrentView = _settingsViewModel;
+                break;
+        }
     }
 }

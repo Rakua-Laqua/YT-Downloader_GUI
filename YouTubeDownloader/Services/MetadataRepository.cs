@@ -17,6 +17,7 @@ public interface IMetadataRepository
     Task SaveVideoMetadataAsync(VideoMetadata metadata);
     Task<IEnumerable<VideoMetadata>> FindVideosAsync(string? searchQuery = null);
     Task DeleteVideoMetadataAsync(string videoId);
+    Task DeleteVideoMetadataAsync(IEnumerable<string> videoIds);
 }
 
 public class MetadataRepository : IMetadataRepository
@@ -124,6 +125,31 @@ public class MetadataRepository : IMetadataRepository
             await LoadIfNeededAsync();
             _cache.RemoveAll(v => v.Id == videoId);
             await SaveAsync();
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public async Task DeleteVideoMetadataAsync(IEnumerable<string> videoIds)
+    {
+        // 一括削除はまとめて1回だけ保存する（件数分のファイル書き込みを避ける）
+        var idSet = videoIds as ISet<string> ?? new HashSet<string>(videoIds);
+        if (idSet.Count == 0)
+        {
+            return;
+        }
+
+        await _mutex.WaitAsync();
+        try
+        {
+            await LoadIfNeededAsync();
+            var removed = _cache.RemoveAll(v => idSet.Contains(v.Id));
+            if (removed > 0)
+            {
+                await SaveAsync();
+            }
         }
         finally
         {

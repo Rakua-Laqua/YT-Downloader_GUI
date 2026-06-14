@@ -52,7 +52,6 @@
                 <StackPanel Grid.Row="1" Margin="10,0">
                     <!-- ダウンロード -->
                     <RadioButton x:Name="NavDownload"
-                                 Command="{Binding NavigateToDownloadCommand}"
                                  IsChecked="{Binding SelectedNavigation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Download}"
                                  GroupName="Navigation"
                                  Style="{StaticResource NavButtonStyle}">
@@ -64,7 +63,6 @@
 
                     <!-- ライブラリ -->
                     <RadioButton x:Name="NavLibrary"
-                                 Command="{Binding NavigateToLibraryAsyncCommand}"
                                  IsChecked="{Binding SelectedNavigation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Library}"
                                  GroupName="Navigation"
                                  Style="{StaticResource NavButtonStyle}">
@@ -76,7 +74,6 @@
 
                     <!-- 設定 -->
                     <RadioButton x:Name="NavSettings"
-                                 Command="{Binding NavigateToSettingsCommand}"
                                  IsChecked="{Binding SelectedNavigation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Settings}"
                                  GroupName="Navigation"
                                  Style="{StaticResource NavButtonStyle}">

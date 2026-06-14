@@ -11,6 +11,9 @@ namespace YouTubeDownloader.Services;
 /// </summary>
 public interface ISettingsRepository
 {
+    /// <summary>設定が保存されたときに発火する（保存後の設定を引数に渡す）</summary>
+    event EventHandler<AppSettings>? SettingsSaved;
+
     AppSettings Load();
     Task SaveAsync(AppSettings settings);
 }
@@ -19,6 +22,8 @@ public class SettingsRepository : ISettingsRepository
 {
     private readonly string _settingsFilePath;
     private readonly JsonSerializerOptions _jsonOptions;
+
+    public event EventHandler<AppSettings>? SettingsSaved;
 
     public SettingsRepository()
     {
@@ -54,5 +59,6 @@ public class SettingsRepository : ISettingsRepository
     {
         var json = JsonSerializer.Serialize(settings, _jsonOptions);
         await File.WriteAllTextAsync(_settingsFilePath, json);
+        SettingsSaved?.Invoke(this, settings);
     }
 }
