@@ -298,7 +298,9 @@
                                                                   CommandParameter="{Binding}"/>
                                                 </TextBlock.InputBindings>
                                             </TextBlock>
-                                            <TextBlock Text="{Binding StatusText}" Foreground="Gray" FontSize="12"/>
+                                            <TextBlock Text="{Binding StatusText}" Foreground="Gray" FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       ToolTip="{Binding StatusText}"/>
                                         </StackPanel>
 
                                         <!-- 進捗 (変換などの後処理中は不確定アニメで「処理中」を示す) -->

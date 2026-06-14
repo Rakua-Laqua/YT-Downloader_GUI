@@ -48,6 +48,37 @@ public class YtDlpClient : IYtDlpClient
     private readonly SemaphoreSlim _ytDlpUpdateLock = new(1, 1);
     private bool _hasCheckedYtDlpUpdate;
 
+    /// <summary>
+    /// yt-dlpの標準エラー出力をデコードするエンコーディング。
+    /// yt-dlpはリダイレクト時、出力をシステムのANSIコードページ（日本語ならcp932）で書き出すため、
+    /// UTF-8でデコードすると日本語のエラーメッセージが文字化けする。ANSIコードページで読む。
+    /// </summary>
+    private static readonly Encoding StdErrEncoding = ResolveStdErrEncoding();
+
+    /// <summary>
+    /// UNPLAYABLE/403などでデフォルトのclientが失敗した場合に再試行で使うplayer client群。
+    /// </summary>
+    private const string FallbackPlayerClients = "tv,web_safari,android";
+
+    private static Encoding ResolveStdErrEncoding()
+    {
+        try
+        {
+            // .NET (Core)では既定でcp932等のコードページが使えないため、プロバイダを登録する
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            var ansiCodePage = CultureInfo.CurrentCulture.TextInfo.ANSICodePage;
+            if (ansiCodePage > 0)
+            {
+                return Encoding.GetEncoding(ansiCodePage);
+            }
+        }
+        catch
+        {
+            // 取得失敗時はUTF-8にフォールバック
+        }
+        return Encoding.UTF8;
+    }
+
     public YtDlpClient(ISettingsRepository settingsRepository)
     {
         _settingsRepository = settingsRepository;
@@ -114,26 +145,45 @@ public class YtDlpClient : IYtDlpClient
                 }
             }
 
-            // 単一動画として解析（1回の呼び出しのみ）
-            var videoResult = await RunYtDlpAsync(ytDlpPath, $"{metadataLanguageArgs}--dump-json --no-playlist \"{url}\"", cancellationToken);
-            if (!string.IsNullOrEmpty(videoResult))
+            // 単一動画として解析
+            var (videoResult, videoError, _) = await RunYtDlpRawAsync(
+                ytDlpPath, $"{metadataLanguageArgs}--dump-json --no-playlist \"{url}\"", cancellationToken);
+            var video = !string.IsNullOrEmpty(videoResult) ? ParseVideoMetadata(videoResult, url) : null;
+
+            // 失敗時はplayer clientを変えて再試行（UNPLAYABLE/403などはこれで取得できることがある）
+            if (video == null)
             {
-                var video = ParseVideoMetadata(videoResult, url);
-                if (video != null)
+                var fallbackArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, FallbackPlayerClients);
+                var (retryResult, retryError, _) = await RunYtDlpRawAsync(
+                    ytDlpPath, $"{fallbackArgs}--dump-json --no-playlist \"{url}\"", cancellationToken);
+                if (!string.IsNullOrEmpty(retryResult))
                 {
-                    return new YtDlpAnalyzeResult
-                    {
-                        IsSuccess = true,
-                        IsPlaylist = false,
-                        VideoMetadata = video
-                    };
+                    video = ParseVideoMetadata(retryResult, url);
+                }
+
+                // 再試行のエラーを優先（無ければ初回のエラー）して理由を残す
+                if (!string.IsNullOrWhiteSpace(retryError))
+                {
+                    videoError = retryError;
                 }
             }
 
+            if (video != null)
+            {
+                return new YtDlpAnalyzeResult
+                {
+                    IsSuccess = true,
+                    IsPlaylist = false,
+                    VideoMetadata = video
+                };
+            }
+
+            // 実際のyt-dlpのエラー理由を添えて返す（文字化けはStdErrEncodingで解消済み）
+            var reason = ExtractMeaningfulError(videoError);
             return new YtDlpAnalyzeResult
             {
                 IsSuccess = false,
-                ErrorMessage = "動画情報を取得できませんでした。URLが正しいか確認してください。"
+                ErrorMessage = $"動画情報を取得できませんでした。\n{reason}"
             };
         }
         catch (Exception ex)
@@ -436,31 +486,18 @@ public class YtDlpClient : IYtDlpClient
 
             if (exitCode != 0)
             {
-                // 403系は android client で再試行（web強制より成功率が高い）
-                if (stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
-                    stderr.Contains("403", StringComparison.OrdinalIgnoreCase))
-                {
-                    var retryArguments = BuildAndroidRetryArguments(arguments, settings);
+                // 403 や UNPLAYABLE（「この動画は…」）はデフォルトclientの問題であることが多い。
+                // 別のplayer client群（tv等）で1回だけ再試行する。
+                var retryArguments = BuildFallbackClientArguments(arguments, settings);
 
-                    Debug.WriteLine($"yt-dlp retry(android): {ytDlpPath} {retryArguments}");
-                    var (retryExitCode, retryStderr) = await RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
+                Debug.WriteLine($"yt-dlp retry(fallback clients): {ytDlpPath} {retryArguments}");
+                var (retryExitCode, retryStderr) = await RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
 
-                    if (retryExitCode != 0)
-                    {
-                        throw new Exception($"ダウンロードに失敗しました: {retryStderr}");
-                    }
-                }
-                // NOTE: 上の分岐の "403" 判定が IsHttpForbidden の対象を包含しているため、現状この分岐には到達しない
-                else if (IsHttpForbidden(stderr))
+                if (retryExitCode != 0)
                 {
-                    throw new Exception(
-                        "高画質形式のダウンロードが YouTube 側の 403 エラーで拒否されました。" +
-                        "360pへ自動低下しないよう停止しました。yt-dlp を最新版へ更新するか、" +
-                        "必要に応じて cookies / PO Token を設定してから再試行してください。");
-                }
-                else
-                {
-                    throw new Exception($"ダウンロードに失敗しました: {stderr}");
+                    // 初回・再試行のうち、より具体的なERROR行を表示に使う
+                    var reason = ExtractMeaningfulError(string.IsNullOrWhiteSpace(retryStderr) ? stderr : retryStderr);
+                    throw new Exception($"ダウンロードに失敗しました:\n{reason}");
                 }
             }
 
@@ -573,13 +610,13 @@ public class YtDlpClient : IYtDlpClient
     }
 
     /// <summary>
-    /// 初回の引数の --extractor-args を player_client=android 付きに差し替えたリトライ用引数を構築する
+    /// 初回の引数の --extractor-args を player_client=tv等 付きに差し替えたリトライ用引数を構築する
     /// </summary>
-    private static string BuildAndroidRetryArguments(string arguments, AppSettings settings)
+    private static string BuildFallbackClientArguments(string arguments, AppSettings settings)
     {
         var retryArgs = new StringBuilder(arguments);
         var metadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage);
-        var retryMetadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, "android");
+        var retryMetadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, FallbackPlayerClients);
         if (!string.IsNullOrEmpty(metadataArgs) && arguments.Contains(metadataArgs, StringComparison.Ordinal))
         {
             retryArgs.Replace(metadataArgs, retryMetadataArgs);
@@ -647,7 +684,7 @@ public class YtDlpClient : IYtDlpClient
             RedirectStandardError = true,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            StandardErrorEncoding = StdErrEncoding
         };
 
         using var process = new Process { StartInfo = psi };
@@ -919,12 +956,6 @@ public class YtDlpClient : IYtDlpClient
         };
     }
 
-    private static bool IsHttpForbidden(string stderr)
-    {
-        return stderr.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
-               stderr.Contains("403: Forbidden", StringComparison.OrdinalIgnoreCase);
-    }
-
     public async Task<YtDlpUpdateResult> UpdateYtDlpAsync(string? channelOverride = null, CancellationToken cancellationToken = default)
     {
         var ytDlpPath = GetYtDlpPath();
@@ -1012,7 +1043,7 @@ public class YtDlpClient : IYtDlpClient
             RedirectStandardError = true,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            StandardErrorEncoding = StdErrEncoding
         };
 
         using var process = new Process { StartInfo = psi };
@@ -1156,6 +1187,16 @@ public class YtDlpClient : IYtDlpClient
 
     private static async Task<string> RunYtDlpAsync(string ytDlpPath, string arguments, CancellationToken cancellationToken)
     {
+        var (stdout, _, _) = await RunYtDlpRawAsync(ytDlpPath, arguments, cancellationToken);
+        return stdout;
+    }
+
+    /// <summary>
+    /// yt-dlpを実行し、標準出力・標準エラー・終了コードをまとめて返す。
+    /// stderrはエラー理由の表示に使うため、ANSIコードページでデコードして文字化けを防ぐ。
+    /// </summary>
+    private static async Task<(string StdOut, string StdErr, int ExitCode)> RunYtDlpRawAsync(string ytDlpPath, string arguments, CancellationToken cancellationToken)
+    {
         var psi = new ProcessStartInfo
         {
             FileName = ytDlpPath,
@@ -1165,13 +1206,13 @@ public class YtDlpClient : IYtDlpClient
             RedirectStandardError = true,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            StandardErrorEncoding = StdErrEncoding
         };
 
         using var process = new Process { StartInfo = psi };
         process.Start();
 
-        // stderrも同時に読み捨てる。リダイレクトしたまま読まないと、
+        // stderrも同時に読み取る。リダイレクトしたまま読まないと、
         // 警告などでパイプバッファが満杯になった時点でyt-dlpがブロックしハングする。
         var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
@@ -1179,6 +1220,31 @@ public class YtDlpClient : IYtDlpClient
         await Task.WhenAll(outputTask, errorTask);
         await process.WaitForExitAsync(cancellationToken);
 
-        return outputTask.Result;
+        return (outputTask.Result, errorTask.Result, process.ExitCode);
+    }
+
+    /// <summary>
+    /// yt-dlpの標準エラー出力から、表示に適した「意味のある」行を抜き出す。
+    /// WARNINGなどのノイズを除き、ERROR行を優先して返す。
+    /// </summary>
+    private static string ExtractMeaningfulError(string stderr)
+    {
+        if (string.IsNullOrWhiteSpace(stderr))
+        {
+            return "原因不明のエラーが発生しました。";
+        }
+
+        var lines = stderr
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+
+        var errorLines = lines
+            .Where(line => line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var chosen = errorLines.Count > 0 ? errorLines : lines.TakeLast(3).ToList();
+        return string.Join(Environment.NewLine, chosen);
     }
 }
