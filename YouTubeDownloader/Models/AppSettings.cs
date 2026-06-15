@@ -24,7 +24,7 @@ public class AppSettings
     public string YtDlpUpdateChannel { get; set; } = "stable";
 
     /// <summary>動画タイトルなどのメタデータ取得に使う既定言語</summary>
-    public string DefaultMetadataLanguage { get; set; } = "ja";
+    public string DefaultMetadataLanguage { get; set; } = "default";
 
     /// <summary>デフォルト保存先フォルダ</summary>
     public string DefaultSaveFolder { get; set; } = Path.Combine(

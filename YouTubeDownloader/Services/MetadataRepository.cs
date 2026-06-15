@@ -66,7 +66,7 @@ public class MetadataRepository : IMetadataRepository
     private async Task SaveAsync()
     {
         var json = JsonSerializer.Serialize(_cache, _jsonOptions);
-        await File.WriteAllTextAsync(_metadataFilePath, json);
+        await AtomicFileWriter.WriteAllTextAsync(_metadataFilePath, json);
     }
 
     public async Task SaveVideoMetadataAsync(VideoMetadata metadata)

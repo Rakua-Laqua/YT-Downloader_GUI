@@ -39,7 +39,7 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _autoUpdateYtDlp = true;
 
     [ObservableProperty]
-    private string _defaultMetadataLanguage = "ja";
+    private string _defaultMetadataLanguage = "default";
 
     [ObservableProperty]
     private string _defaultSaveFolder = string.Empty;
@@ -109,7 +109,7 @@ public partial class SettingsViewModel : ViewModelBase
         "192K",
         "256K"
     };
-    public string[] MetadataLanguages { get; } = { "ja", "en", "default", "ko", "zh-Hans", "zh-Hant", "es", "fr", "de" };
+    public string[] MetadataLanguages { get; } = { "default", "ja", "en", "ko", "zh-Hans", "zh-Hant", "es", "fr", "de" };
 
     /// <summary>同時ダウンロード数</summary>
     [ObservableProperty]
@@ -180,7 +180,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.AutoUpdateYtDlp = AutoUpdateYtDlp;
         _settings.YtDlpUpdateChannel = NormalizeSelection(YtDlpUpdateChannel, UpdateChannels, "stable");
         _settings.DefaultMetadataLanguage = string.IsNullOrWhiteSpace(DefaultMetadataLanguage)
-            ? "ja"
+            ? "default"
             : DefaultMetadataLanguage.Trim();
         _settings.DefaultSaveFolder = DefaultSaveFolder;
         _settings.DefaultVideoFormat = DefaultVideoFormat;
@@ -241,7 +241,7 @@ public partial class SettingsViewModel : ViewModelBase
         AutoUpdateYtDlp = _settings.AutoUpdateYtDlp;
         YtDlpUpdateChannel = NormalizeSelection(_settings.YtDlpUpdateChannel, UpdateChannels, "stable");
         DefaultMetadataLanguage = string.IsNullOrWhiteSpace(_settings.DefaultMetadataLanguage)
-            ? "ja"
+            ? "default"
             : _settings.DefaultMetadataLanguage;
         DefaultSaveFolder = _settings.DefaultSaveFolder;
         DefaultVideoFormat = _settings.DefaultVideoFormat;

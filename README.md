@@ -52,7 +52,7 @@ git clone https://github.com/Rakua-Laqua/YT-Downloader_GUI.git
 cd YT-Downloader_GUI
 
 # ビルド
-dotnet build
+dotnet build YouTubeDownloader\YouTubeDownloader.csproj -nologo --no-restore
 
 # 実行
 dotnet run --project YouTubeDownloader
