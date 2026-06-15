@@ -495,12 +495,10 @@ public class YtDlpClient : IYtDlpClient
             ? Path.Combine(Path.GetTempPath(), $"ytdlp_ffprog_{job.Id:N}.txt")
             : null;
 
-        // 更新日時を公開日に合わせる場合、yt-dlpに upload_date を書き出させる一時ファイル
-        string? uploadDateFile = settings.SetFileDateToPublishDate
-            ? Path.Combine(Path.GetTempPath(), $"ytdlp_ud_{job.Id:N}.txt")
-            : null;
+        // ダウンロードした正確なファイルパスと公開日時を書き出させる一時ファイル
+        string downloadInfoFile = Path.Combine(Path.GetTempPath(), $"ytdlp_info_{job.Id:N}.txt");
 
-        var arguments = BuildDownloadArguments(job, settings, outputPath, requestedFormat, conversionProgressFile, uploadDateFile);
+        var arguments = BuildDownloadArguments(job, settings, outputPath, requestedFormat, conversionProgressFile, downloadInfoFile);
 
         try
         {
@@ -518,35 +516,44 @@ public class YtDlpClient : IYtDlpClient
 
                 if (retryExitCode != 0)
                 {
-                    // 初回・再試行のうち、より具体的なERROR行を表示に使う
-                    var reason = ExtractMeaningfulError(string.IsNullOrWhiteSpace(retryStderr) ? stderr : retryStderr);
-                    throw new Exception($"ダウンロードに失敗しました:\n{reason}");
+                    var firstReason = ExtractMeaningfulError(stderr);
+                    var retryReason = ExtractMeaningfulError(retryStderr);
+
+                    var combinedReason = $"【初回試行のエラー】:\n{firstReason}\n\n【再試行（フォールバック）のエラー】:\n{retryReason}";
+                    throw new Exception($"ダウンロードに失敗しました:\n{combinedReason}");
                 }
             }
 
-            UpdateLocalFilePath(job, outputPath, requestedFormat);
+            var infoResult = ReadDownloadInfoFile(downloadInfoFile);
+
+            // 1) yt-dlpが書き出した正確なファイルパスがある場合、それを最優先で使用する
+            if (!string.IsNullOrEmpty(infoResult.FilePath) && File.Exists(infoResult.FilePath))
+            {
+                job.VideoMetadata.LocalFilePath = infoResult.FilePath;
+            }
+            else
+            {
+                // 2) 取得できなかった場合のフォールバックとして、従来の走査（推測）を行う
+                UpdateLocalFilePath(job, outputPath, requestedFormat);
+            }
 
             // 更新日時のみ公開時刻に合わせる（作成日時はダウンロード時刻のまま残す）
             if (settings.SetFileDateToPublishDate
-                && uploadDateFile != null
                 && !string.IsNullOrEmpty(job.VideoMetadata.LocalFilePath)
-                && File.Exists(job.VideoMetadata.LocalFilePath))
+                && File.Exists(job.VideoMetadata.LocalFilePath)
+                && infoResult.PublishTime.HasValue)
             {
-                var publishTime = ReadPublishWriteTime(uploadDateFile);
-                if (publishTime.HasValue)
+                var publishTime = infoResult.PublishTime.Value;
+                // timestamp由来はUTC絶対時刻なのでSetLastWriteTimeUtcで保存する。
+                // こうするとWindowsは閲覧側PCのローカル時刻に変換して表示する。
+                // upload_date由来は時刻が無いためローカル0時として保存する。
+                if (publishTime.Kind == DateTimeKind.Utc)
                 {
-                    // timestamp由来はUTC絶対時刻なのでSetLastWriteTimeUtcで保存する。
-                    // こうするとWindowsは閲覧側PCのローカル時刻に変換して表示する
-                    // （日本で保存→アメリカで見ると現地時刻、の正しい挙動。日本時間に固定はされない）。
-                    // upload_date由来は時刻が無いためローカル0時として保存する。
-                    if (publishTime.Value.Kind == DateTimeKind.Utc)
-                    {
-                        File.SetLastWriteTimeUtc(job.VideoMetadata.LocalFilePath, publishTime.Value);
-                    }
-                    else
-                    {
-                        File.SetLastWriteTime(job.VideoMetadata.LocalFilePath, publishTime.Value);
-                    }
+                    File.SetLastWriteTimeUtc(job.VideoMetadata.LocalFilePath, publishTime);
+                }
+                else
+                {
+                    File.SetLastWriteTime(job.VideoMetadata.LocalFilePath, publishTime);
                 }
             }
         }
@@ -567,13 +574,13 @@ public class YtDlpClient : IYtDlpClient
                 }
             }
 
-            if (uploadDateFile != null)
+            if (downloadInfoFile != null)
             {
                 try
                 {
-                    if (File.Exists(uploadDateFile))
+                    if (File.Exists(downloadInfoFile))
                     {
-                        File.Delete(uploadDateFile);
+                        File.Delete(downloadInfoFile);
                     }
                 }
                 catch
@@ -590,45 +597,67 @@ public class YtDlpClient : IYtDlpClient
     /// 無ければ upload_date(YYYYMMDD) のローカル0時(Kind=Unspecified)を返す。
     /// 再試行で複数行になり得るため、最初に解釈できた行を採用する。
     /// </summary>
-    private static DateTime? ReadPublishWriteTime(string path)
+    private class DownloadInfoResult
     {
+        public string? FilePath { get; set; }
+        public DateTime? PublishTime { get; set; }
+    }
+
+    private static DownloadInfoResult ReadDownloadInfoFile(string path)
+    {
+        var result = new DownloadInfoResult();
         try
         {
-            foreach (var line in File.ReadAllLines(path))
+            if (File.Exists(path))
             {
-                var parts = line.Trim().Split('|');
-
-                // 1) timestamp(UNIX秒) を最優先。"NA"や空はスキップ。
-                if (parts.Length >= 1
-                    && long.TryParse(parts[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var epoch)
-                    && epoch > 0)
+                foreach (var line in File.ReadAllLines(path))
                 {
-                    return DateTimeOffset.FromUnixTimeSeconds(epoch).UtcDateTime; // Kind=Utc
-                }
-
-                // 2) upload_date(YYYYMMDD) にフォールバック（時刻なし→ローカル0時）。
-                if (parts.Length >= 2)
-                {
-                    var dateToken = parts[1].Trim();
-                    if (dateToken.Length == 8
-                        && DateTime.TryParseExact(dateToken, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate))
+                    var parts = line.Trim().Split('|');
+                    if (parts.Length >= 1)
                     {
-                        return parsedDate; // Kind=Unspecified（ローカル扱い）
+                        var filePathVal = parts[0].Trim();
+                        if (!string.IsNullOrEmpty(filePathVal))
+                        {
+                            result.FilePath = filePathVal;
+                        }
+                    }
+
+                    // 1) timestamp(UNIX秒) を最優先
+                    if (parts.Length >= 2
+                        && long.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var epoch)
+                        && epoch > 0)
+                    {
+                        result.PublishTime = DateTimeOffset.FromUnixTimeSeconds(epoch).UtcDateTime; // Kind=Utc
+                    }
+                    // 2) upload_date(YYYYMMDD) にフォールバック
+                    else if (parts.Length >= 3)
+                    {
+                        var dateToken = parts[2].Trim();
+                        if (dateToken.Length == 8
+                            && DateTime.TryParseExact(dateToken, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate))
+                        {
+                            result.PublishTime = parsedDate; // Kind=Unspecified
+                        }
+                    }
+
+                    if (result.FilePath != null || result.PublishTime != null)
+                    {
+                        break;
                     }
                 }
             }
         }
         catch
         {
-            // 読み取り失敗時は更新日時を変更しない
+            // 読み取り失敗時は何も設定しない
         }
-        return null;
+        return result;
     }
 
     /// <summary>
     /// ダウンロード用のyt-dlpコマンドライン引数を構築する
     /// </summary>
-    private static List<string> BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat, string? conversionProgressFile = null, string? uploadDateFile = null)
+    private static List<string> BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat, string? conversionProgressFile = null, string? downloadInfoFile = null)
     {
         var args = new List<string>();
 
@@ -701,11 +730,11 @@ public class YtDlpClient : IYtDlpClient
         // ダウンロード完了後にC#側で読み取って設定する。
         // timestamp(UNIX秒, UTC絶対時刻) を優先し、無い動画は upload_date(日付のみ) にフォールバックする。
         // after_move: は最終ファイル移動後に走り、--print と違い --simulate を誘発しない。
-        if (settings.SetFileDateToPublishDate && !string.IsNullOrEmpty(uploadDateFile))
+        if (!string.IsNullOrEmpty(downloadInfoFile))
         {
             args.Add("--print-to-file");
-            args.Add("after_move:%(timestamp)s|%(upload_date)s");
-            args.Add(uploadDateFile);
+            args.Add("after_move:%(filepath)s|%(timestamp)s|%(upload_date)s");
+            args.Add(downloadInfoFile);
         }
 
         // サムネイルを埋め込む（音声ファイルの場合はアートワークとして）
@@ -742,6 +771,10 @@ public class YtDlpClient : IYtDlpClient
         // 進捗表示用
         args.Add("--newline");
         args.Add("--no-warnings");
+
+        // JSチャレンジ解決用のランタイムを指定（DenoとNode.jsを優先）
+        args.Add("--js-runtimes");
+        args.Add("deno,node");
 
         // URL
         args.Add(job.VideoMetadata.Url);
