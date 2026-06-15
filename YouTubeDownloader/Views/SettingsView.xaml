@@ -261,6 +261,21 @@
                                    TextWrapping="Wrap"/>
                     </StackPanel>
 
+                    <!-- 日付メタデータ設定 -->
+                    <StackPanel Margin="0,0,0,20">
+                        <CheckBox Content="ファイルの更新日時を動画の公開日に合わせる"
+                                  IsChecked="{Binding SetFileDateToPublishDate}"/>
+                        <TextBlock Text="ダウンロード後、ファイルの更新日時をYouTubeでの公開日に変更します。"
+                                   Foreground="Gray" FontSize="11" Margin="0,5,0,0"
+                                   TextWrapping="Wrap"/>
+                        <CheckBox Content="メタデータの「年」を公開年に修正する"
+                                  IsChecked="{Binding FixMetadataYear}"
+                                  Margin="0,10,0,0"/>
+                        <TextBlock Text="MP4などに埋め込まれる「年」タグを正しい公開年（例: 2025）に設定します。"
+                                   Foreground="Gray" FontSize="11" Margin="0,5,0,0"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+
                     <!-- ファイル名テンプレート -->
                     <StackPanel>
                         <TextBlock Text="ファイル名テンプレート" FontWeight="SemiBold" Margin="0,0,0,8"/>

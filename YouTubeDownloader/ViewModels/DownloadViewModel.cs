@@ -25,6 +25,7 @@ public partial class DownloadViewModel : ViewModelBase
     private string _defaultVideoFormat = "mp4";
     private string _defaultAudioFormat = "mp3";
     private string _defaultVideoQuality = "best";
+    private string _defaultSaveFolder = string.Empty;
     private DateTime _lastTaskbarFlashAt = DateTime.MinValue;
     private bool _hasFlashedForAllCompleted;
     private string _lastVideoQuality = "best";
@@ -46,7 +47,7 @@ public partial class DownloadViewModel : ViewModelBase
         // 設定を読み込み
         var settings = _settingsRepository.Load();
         LoadDefaultsFrom(settings);
-        _saveFolderPath = settings.DefaultSaveFolder;
+        _saveFolderPath = _defaultSaveFolder;
         _selectedFormat = _defaultVideoFormat;
         _selectedQuality = _defaultVideoQuality;
 
@@ -515,6 +516,7 @@ public partial class DownloadViewModel : ViewModelBase
         _defaultVideoQuality = NormalizeSelection(settings.DefaultQuality, VideoQualities, "best");
         _lastVideoQuality = _defaultVideoQuality;
         _lastAudioQuality = NormalizeSelection(settings.DefaultAudioQuality, AudioQualities, "標準 (VBR 5)");
+        _defaultSaveFolder = settings.DefaultSaveFolder;
     }
 
     private void OnSettingsSaved(object? sender, AppSettings settings)
@@ -550,5 +552,6 @@ public partial class DownloadViewModel : ViewModelBase
         _pendingDefaultsApply = false;
         SelectedFormat = IsAudioOnly ? _defaultAudioFormat : _defaultVideoFormat;
         SelectedQuality = IsAudioOnly ? _lastAudioQuality : _lastVideoQuality;
+        SaveFolderPath = _defaultSaveFolder;
     }
 }

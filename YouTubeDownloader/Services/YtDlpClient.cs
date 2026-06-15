@@ -495,7 +495,12 @@ public class YtDlpClient : IYtDlpClient
             ? Path.Combine(Path.GetTempPath(), $"ytdlp_ffprog_{job.Id:N}.txt")
             : null;
 
-        var arguments = BuildDownloadArguments(job, settings, outputPath, requestedFormat, conversionProgressFile);
+        // 更新日時を公開日に合わせる場合、yt-dlpに upload_date を書き出させる一時ファイル
+        string? uploadDateFile = settings.SetFileDateToPublishDate
+            ? Path.Combine(Path.GetTempPath(), $"ytdlp_ud_{job.Id:N}.txt")
+            : null;
+
+        var arguments = BuildDownloadArguments(job, settings, outputPath, requestedFormat, conversionProgressFile, uploadDateFile);
 
         try
         {
@@ -520,6 +525,19 @@ public class YtDlpClient : IYtDlpClient
             }
 
             UpdateLocalFilePath(job, outputPath, requestedFormat);
+
+            // 更新日時のみ公開日に合わせる（作成日時はダウンロード時刻のまま残す）
+            if (settings.SetFileDateToPublishDate
+                && uploadDateFile != null
+                && !string.IsNullOrEmpty(job.VideoMetadata.LocalFilePath)
+                && File.Exists(job.VideoMetadata.LocalFilePath))
+            {
+                var uploadDate = ReadUploadDate(uploadDateFile);
+                if (uploadDate.HasValue)
+                {
+                    File.SetLastWriteTime(job.VideoMetadata.LocalFilePath, uploadDate.Value);
+                }
+            }
         }
         finally
         {
@@ -537,13 +555,53 @@ public class YtDlpClient : IYtDlpClient
                     // 一時ファイルの削除失敗は無視
                 }
             }
+
+            if (uploadDateFile != null)
+            {
+                try
+                {
+                    if (File.Exists(uploadDateFile))
+                    {
+                        File.Delete(uploadDateFile);
+                    }
+                }
+                catch
+                {
+                    // 一時ファイルの削除失敗は無視
+                }
+            }
         }
+    }
+
+    /// <summary>
+    /// yt-dlpが書き出した upload_date 一時ファイルから YYYYMMDD を読み取る。
+    /// 再試行で複数行になり得るため、最初に解釈できた8桁日付を採用する。
+    /// </summary>
+    private static DateTime? ReadUploadDate(string path)
+    {
+        try
+        {
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var token = line.Trim();
+                if (token.Length == 8
+                    && DateTime.TryParseExact(token, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+        }
+        catch
+        {
+            // 読み取り失敗時は更新日時を変更しない
+        }
+        return null;
     }
 
     /// <summary>
     /// ダウンロード用のyt-dlpコマンドライン引数を構築する
     /// </summary>
-    private static List<string> BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat, string? conversionProgressFile = null)
+    private static List<string> BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat, string? conversionProgressFile = null, string? uploadDateFile = null)
     {
         var args = new List<string>();
 
@@ -600,6 +658,27 @@ public class YtDlpClient : IYtDlpClient
 
         // メタデータを埋め込む
         args.Add("--embed-metadata");
+
+        // メタデータの「年」タグを公開年に修正する。
+        // yt-dlpが既定で書く date=YYYYMMDD(8桁) はWindowsの「年」が16bitに丸めて化けるため、
+        // upload_date の年(4桁)だけを meta_date に上書きして埋め込ませる。
+        // yt-dlp自身が抽出する upload_date を使うので、フラット解析で PublishDate が空になる
+        // プレイリスト項目でも確実に効く。
+        if (settings.FixMetadataYear)
+        {
+            args.Add("--parse-metadata");
+            args.Add("%(upload_date>%Y)s:%(meta_date)s");
+        }
+
+        // ファイル更新日時を公開日に合わせる場合、yt-dlpの upload_date(YYYYMMDD) を
+        // 一時ファイルへ書き出し、ダウンロード完了後にC#側で読み取って設定する。
+        // after_move: は最終ファイル移動後に走り、--print と違い --simulate を誘発しない。
+        if (settings.SetFileDateToPublishDate && !string.IsNullOrEmpty(uploadDateFile))
+        {
+            args.Add("--print-to-file");
+            args.Add("after_move:%(upload_date)s");
+            args.Add(uploadDateFile);
+        }
 
         // サムネイルを埋め込む（音声ファイルの場合はアートワークとして）
         if (requestedFormat == "mp3" || requestedFormat == "m4a")

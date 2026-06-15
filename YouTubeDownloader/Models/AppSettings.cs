@@ -46,6 +46,12 @@ public class AppSettings
     /// <summary>mp4でもAV1などの高効率コーデックを優先するか</summary>
     public bool PreferHighEfficiencyCodecs { get; set; }
 
+    /// <summary>ファイルの更新日時を動画の公開日に合わせるか</summary>
+    public bool SetFileDateToPublishDate { get; set; }
+
+    /// <summary>メタデータの「年」タグを動画の公開年に修正するか</summary>
+    public bool FixMetadataYear { get; set; }
+
     /// <summary>ファイル名テンプレート</summary>
     public string FilenameTemplate { get; set; } = "{title}";
 

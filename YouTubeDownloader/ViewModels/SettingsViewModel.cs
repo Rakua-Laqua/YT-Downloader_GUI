@@ -60,6 +60,12 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _preferHighEfficiencyCodecs;
 
     [ObservableProperty]
+    private bool _setFileDateToPublishDate;
+
+    [ObservableProperty]
+    private bool _fixMetadataYear;
+
+    [ObservableProperty]
     private string _filenameTemplate = "{title}";
 
     [ObservableProperty]
@@ -188,6 +194,8 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.DefaultQuality = DefaultQuality;
         _settings.DefaultAudioQuality = DefaultAudioQuality;
         _settings.PreferHighEfficiencyCodecs = PreferHighEfficiencyCodecs;
+        _settings.SetFileDateToPublishDate = SetFileDateToPublishDate;
+        _settings.FixMetadataYear = FixMetadataYear;
         _settings.FilenameTemplate = FilenameTemplate;
         _settings.MaxConcurrentDownloads = DownloadManager.ClampConcurrency(MaxConcurrentDownloads);
 
@@ -249,6 +257,8 @@ public partial class SettingsViewModel : ViewModelBase
         DefaultQuality = _settings.DefaultQuality;
         DefaultAudioQuality = NormalizeSelection(_settings.DefaultAudioQuality, AudioQualities, "標準 (VBR 5)");
         PreferHighEfficiencyCodecs = _settings.PreferHighEfficiencyCodecs;
+        SetFileDateToPublishDate = _settings.SetFileDateToPublishDate;
+        FixMetadataYear = _settings.FixMetadataYear;
         FilenameTemplate = _settings.FilenameTemplate;
         MaxConcurrentDownloads = DownloadManager.ClampConcurrency(_settings.MaxConcurrentDownloads);
 
