@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,7 +34,6 @@ public class DownloadManager : IDownloadManager, IDisposable
     private readonly IYtDlpClient _ytDlpClient;
     private readonly IMetadataRepository _metadataRepository;
     private readonly ISettingsRepository _settingsRepository;
-    private readonly ConcurrentQueue<DownloadJob> _pendingQueue = new();
     private readonly List<DownloadJob> _allJobs = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _cancellationTokens = new();
     private readonly SemaphoreSlim _semaphore;
@@ -225,7 +223,14 @@ public class DownloadManager : IDownloadManager, IDisposable
             cts.Dispose();
             if (semaphoreAcquired)
             {
-                _semaphore.Release();
+                try
+                {
+                    _semaphore.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Dispose済みなら終了処理中なので何もしない
+                }
             }
         }
     }

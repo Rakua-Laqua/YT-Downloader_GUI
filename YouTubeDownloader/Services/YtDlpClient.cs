@@ -138,7 +138,13 @@ public class YtDlpClient : IYtDlpClient
             if (isPlaylistUrl)
             {
                 // プレイリストURL: --flat-playlistで高速に一覧取得
-                var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, $"{metadataLanguageArgs}--dump-single-json --flat-playlist \"{url}\"", cancellationToken);
+                var playlistArgs = new List<string>(metadataLanguageArgs)
+                {
+                    "--dump-single-json",
+                    "--flat-playlist",
+                    url
+                };
+                var playlistInfoResult = await RunYtDlpAsync(ytDlpPath, playlistArgs, cancellationToken);
                 if (!string.IsNullOrEmpty(playlistInfoResult))
                 {
                     return ParsePlaylistFromJson(playlistInfoResult);
@@ -146,16 +152,28 @@ public class YtDlpClient : IYtDlpClient
             }
 
             // 単一動画として解析
+            var videoArgs = new List<string>(metadataLanguageArgs)
+            {
+                "--dump-json",
+                "--no-playlist",
+                url
+            };
             var (videoResult, videoError, _) = await RunYtDlpRawAsync(
-                ytDlpPath, $"{metadataLanguageArgs}--dump-json --no-playlist \"{url}\"", cancellationToken);
+                ytDlpPath, videoArgs, cancellationToken);
             var video = !string.IsNullOrEmpty(videoResult) ? ParseVideoMetadata(videoResult, url) : null;
 
             // 失敗時はplayer clientを変えて再試行（UNPLAYABLE/403などはこれで取得できることがある）
             if (video == null)
             {
                 var fallbackArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, FallbackPlayerClients);
+                var retryArgs = new List<string>(fallbackArgs)
+                {
+                    "--dump-json",
+                    "--no-playlist",
+                    url
+                };
                 var (retryResult, retryError, _) = await RunYtDlpRawAsync(
-                    ytDlpPath, $"{fallbackArgs}--dump-json --no-playlist \"{url}\"", cancellationToken);
+                    ytDlpPath, retryArgs, cancellationToken);
                 if (!string.IsNullOrEmpty(retryResult))
                 {
                     video = ParseVideoMetadata(retryResult, url);
@@ -405,23 +423,23 @@ public class YtDlpClient : IYtDlpClient
         return "";
     }
 
-    private static string BuildMetadataLanguageArguments(string? language, string? playerClient = null)
+    private static List<string> BuildMetadataLanguageArguments(string? language, string? playerClient = null)
     {
-        var args = new List<string>();
+        var extractorArgs = new List<string>();
         var normalized = NormalizeMetadataLanguage(language);
         if (!string.IsNullOrEmpty(normalized))
         {
-            args.Add($"lang={normalized}");
+            extractorArgs.Add($"lang={normalized}");
         }
 
         if (!string.IsNullOrWhiteSpace(playerClient))
         {
-            args.Add($"player_client={playerClient.Trim()}");
+            extractorArgs.Add($"player_client={playerClient.Trim()}");
         }
 
-        return args.Count == 0
-            ? string.Empty
-            : $"--extractor-args \"youtube:{string.Join(';', args)}\" ";
+        return extractorArgs.Count == 0
+            ? new List<string>()
+            : new List<string> { "--extractor-args", $"youtube:{string.Join(';', extractorArgs)}" };
     }
 
     private static string NormalizeMetadataLanguage(string? language)
@@ -465,7 +483,7 @@ public class YtDlpClient : IYtDlpClient
 
         // ファイル名テンプレートを構築
         var template = BuildFilenameTemplate(settings.FilenameTemplate, job);
-        var outputPath = Path.Combine(job.SaveFolderPath, template);
+        var outputPath = BuildOutputPath(job.SaveFolderPath, template);
 
         var requestedFormat = NormalizeFormat(job.Format);
 
@@ -481,7 +499,7 @@ public class YtDlpClient : IYtDlpClient
 
         try
         {
-            Debug.WriteLine($"yt-dlp: {ytDlpPath} {arguments}");
+            Debug.WriteLine($"yt-dlp: {ytDlpPath} {FormatArgumentsForLog(arguments)}");
             var (exitCode, stderr) = await RunDownloadProcessAsync(ytDlpPath, arguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
 
             if (exitCode != 0)
@@ -490,7 +508,7 @@ public class YtDlpClient : IYtDlpClient
                 // 別のplayer client群（tv等）で1回だけ再試行する。
                 var retryArguments = BuildFallbackClientArguments(arguments, settings);
 
-                Debug.WriteLine($"yt-dlp retry(fallback clients): {ytDlpPath} {retryArguments}");
+                Debug.WriteLine($"yt-dlp retry(fallback clients): {ytDlpPath} {FormatArgumentsForLog(retryArguments)}");
                 var (retryExitCode, retryStderr) = await RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
 
                 if (retryExitCode != 0)
@@ -501,7 +519,7 @@ public class YtDlpClient : IYtDlpClient
                 }
             }
 
-            UpdateLocalFilePath(job, template);
+            UpdateLocalFilePath(job, outputPath, requestedFormat);
         }
         finally
         {
@@ -525,15 +543,16 @@ public class YtDlpClient : IYtDlpClient
     /// <summary>
     /// ダウンロード用のyt-dlpコマンドライン引数を構築する
     /// </summary>
-    private static string BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat, string? conversionProgressFile = null)
+    private static List<string> BuildDownloadArguments(DownloadJob job, AppSettings settings, string outputPath, string requestedFormat, string? conversionProgressFile = null)
     {
-        var args = new StringBuilder();
+        var args = new List<string>();
 
         // タイトル等のローカライズは設定画面の「タイトル取得言語」を優先する
         // 出力テンプレート
-        args.Append($"-o \"{outputPath}\" ");
-        args.Append("--force-overwrites ");
-        args.Append(BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage));
+        args.Add("-o");
+        args.Add(outputPath);
+        args.Add("--force-overwrites");
+        args.AddRange(BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage));
 
         // フォーマット指定
         if (IsAudioFormat(requestedFormat))
@@ -543,17 +562,22 @@ public class YtDlpClient : IYtDlpClient
                 // m4aネイティブ(AAC)音源を最優先で選択する。
                 // 元がAACなら ExtractAudio が再エンコードせずコピーするため変換がほぼ一瞬で終わる。
                 // (--audio-quality はコピー時には無視されるため付与しない)
-                args.Append("-f \"bestaudio[ext=m4a]/bestaudio/best\" ");
-                args.Append("-x ");
-                args.Append("--audio-format m4a ");
+                args.Add("-f");
+                args.Add("bestaudio[ext=m4a]/bestaudio/best");
+                args.Add("-x");
+                args.Add("--audio-format");
+                args.Add("m4a");
             }
             else
             {
                 // mp3 / wav は仕様上どうしても再エンコード(transcode)が発生する。
-                args.Append("-f \"bestaudio/best\" ");
-                args.Append("-x ");
-                args.Append($"--audio-format {requestedFormat} ");
-                args.Append($"--audio-quality {BuildAudioQualityArgument(job.Quality)} ");
+                args.Add("-f");
+                args.Add("bestaudio/best");
+                args.Add("-x");
+                args.Add("--audio-format");
+                args.Add(requestedFormat);
+                args.Add("--audio-quality");
+                args.Add(BuildAudioQualityArgument(job.Quality));
 
                 // ExtractAudio(ffmpeg)に変換進捗を一時ファイルへ出力させ、実進捗を表示できるようにする。
                 // yt-dlpは --postprocessor-args の値を shlex 分割する際にバックスラッシュをエスケープとして
@@ -561,23 +585,26 @@ public class YtDlpClient : IYtDlpClient
                 if (!string.IsNullOrEmpty(conversionProgressFile))
                 {
                     var ffmpegProgressPath = conversionProgressFile.Replace('\\', '/');
-                    args.Append($"--postprocessor-args \"ExtractAudio:-progress \\\"{ffmpegProgressPath}\\\"\" ");
+                    args.Add("--postprocessor-args");
+                    args.Add($"ExtractAudio:-progress \"{ffmpegProgressPath}\"");
                 }
             }
         }
         else
         {
-            args.Append($"-f \"{BuildVideoFormatSelector(job.Quality, requestedFormat, settings.PreferHighEfficiencyCodecs)}\" ");
-            args.Append($"--merge-output-format {requestedFormat} ");
+            args.Add("-f");
+            args.Add(BuildVideoFormatSelector(job.Quality, requestedFormat, settings.PreferHighEfficiencyCodecs));
+            args.Add("--merge-output-format");
+            args.Add(requestedFormat);
         }
 
         // メタデータを埋め込む
-        args.Append("--embed-metadata ");
+        args.Add("--embed-metadata");
 
         // サムネイルを埋め込む（音声ファイルの場合はアートワークとして）
         if (requestedFormat == "mp3" || requestedFormat == "m4a")
         {
-            args.Append("--embed-thumbnail ");
+            args.Add("--embed-thumbnail");
         }
 
         // ffmpegパスを自動検出または設定から取得
@@ -588,46 +615,57 @@ public class YtDlpClient : IYtDlpClient
         if (!string.IsNullOrEmpty(ffmpegPath))
         {
             var ffmpegDir = Path.GetDirectoryName(ffmpegPath);
-            args.Append($"--ffmpeg-location \"{ffmpegDir}\" ");
+            if (!string.IsNullOrEmpty(ffmpegDir))
+            {
+                args.Add("--ffmpeg-location");
+                args.Add(ffmpegDir);
+            }
         }
 
         // YouTube対策: User-Agent は指定するが、player_client=web の強制は
         // SABR でURLが欠落し「Requested format is not available」になり得るため行わない。
-        args.Append("--user-agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" ");
+        args.Add("--user-agent");
+        args.Add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
         // 分割配信(DASH/HLS)のフラグメントを並列ダウンロードして取得を高速化する。
         // mp3/wav は再エンコードが避けられないぶん、ダウンロード時間を詰めて総時間を短縮する。
-        args.Append("--concurrent-fragments 4 ");
+        args.Add("--concurrent-fragments");
+        args.Add("4");
 
         // 進捗表示用
-        args.Append("--newline ");
-        args.Append("--no-warnings ");
+        args.Add("--newline");
+        args.Add("--no-warnings");
 
         // URL
-        args.Append($"\"{job.VideoMetadata.Url}\"");
+        args.Add(job.VideoMetadata.Url);
 
-        return args.ToString();
+        return args;
     }
 
     /// <summary>
     /// 初回の引数の --extractor-args を player_client=tv等 付きに差し替えたリトライ用引数を構築する
     /// </summary>
-    private static string BuildFallbackClientArguments(string arguments, AppSettings settings)
+    private static List<string> BuildFallbackClientArguments(IReadOnlyList<string> arguments, AppSettings settings)
     {
-        var retryArgs = new StringBuilder(arguments);
-        var metadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage);
+        var retryArgs = new List<string>(arguments);
         var retryMetadataArgs = BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, FallbackPlayerClients);
-        if (!string.IsNullOrEmpty(metadataArgs) && arguments.Contains(metadataArgs, StringComparison.Ordinal))
+
+        if (retryMetadataArgs.Count == 0)
         {
-            retryArgs.Replace(metadataArgs, retryMetadataArgs);
-        }
-        else if (!string.IsNullOrEmpty(retryMetadataArgs))
-        {
-            retryArgs.Append(' ');
-            retryArgs.Append(retryMetadataArgs);
+            return retryArgs;
         }
 
-        return retryArgs.ToString();
+        var extractorArgsIndex = retryArgs.IndexOf("--extractor-args");
+        if (extractorArgsIndex >= 0 && extractorArgsIndex + 1 < retryArgs.Count)
+        {
+            retryArgs[extractorArgsIndex + 1] = retryMetadataArgs[1];
+        }
+        else
+        {
+            retryArgs.AddRange(retryMetadataArgs);
+        }
+
+        return retryArgs;
     }
 
     private static string BuildAudioQualityArgument(string quality)
@@ -669,40 +707,17 @@ public class YtDlpClient : IYtDlpClient
     /// </summary>
     private static async Task<(int ExitCode, string StdErr)> RunDownloadProcessAsync(
         string ytDlpPath,
-        string arguments,
+        IEnumerable<string> arguments,
         IProgress<ProgressInfo>? progress,
         string? conversionProgressFile,
         int durationSeconds,
         CancellationToken cancellationToken)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = ytDlpPath,
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = StdErrEncoding
-        };
+        var psi = CreateYtDlpStartInfo(ytDlpPath, arguments);
 
         using var process = new Process { StartInfo = psi };
         process.Start();
-        using var killRegistration = cancellationToken.Register(() =>
-        {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch
-            {
-                // The process may already be gone.
-            }
-        });
+        using var killRegistration = RegisterProcessKillOnCancellation(process, cancellationToken);
 
         // 変換進捗ポーラーのキャンセル制御（ExtractAudio開始時に起動する）
         using var conversionPollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -860,16 +875,41 @@ public class YtDlpClient : IYtDlpClient
     /// <summary>
     /// ダウンロード完了後、出力テンプレートに一致する実ファイルを探してジョブに記録する
     /// </summary>
-    private static void UpdateLocalFilePath(DownloadJob job, string template)
+    private static void UpdateLocalFilePath(DownloadJob job, string outputPath, string requestedFormat)
     {
-        var outputBaseName = template.EndsWith(".%(ext)s", StringComparison.OrdinalIgnoreCase)
-            ? template[..^".%(ext)s".Length]
-            : Path.GetFileNameWithoutExtension(template);
-        var files = Directory.GetFiles(job.SaveFolderPath, $"{Path.GetFileName(outputBaseName)}.*");
-        if (files.Length > 0)
+        var outputDirectory = Path.GetDirectoryName(outputPath);
+        if (string.IsNullOrEmpty(outputDirectory) || !Directory.Exists(outputDirectory))
         {
-            job.VideoMetadata.LocalFilePath = files[0];
+            outputDirectory = job.SaveFolderPath;
         }
+
+        var outputFileName = Path.GetFileName(outputPath);
+        var outputBaseName = outputFileName.EndsWith(".%(ext)s", StringComparison.OrdinalIgnoreCase)
+            ? outputFileName[..^".%(ext)s".Length]
+            : Path.GetFileNameWithoutExtension(outputFileName);
+
+        var files = Directory.GetFiles(outputDirectory, $"{Path.GetFileName(outputBaseName)}.*")
+            .Select(path => new FileInfo(path))
+            .Where(file => IsLikelyDownloadedMedia(file, requestedFormat))
+            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .ToList();
+
+        var file = files.FirstOrDefault();
+        if (file != null)
+        {
+            job.VideoMetadata.LocalFilePath = file.FullName;
+        }
+    }
+
+    private static bool IsLikelyDownloadedMedia(FileInfo file, string requestedFormat)
+    {
+        var extension = file.Extension.TrimStart('.').ToLowerInvariant();
+        if (extension == requestedFormat)
+        {
+            return true;
+        }
+
+        return extension is "mp4" or "mkv" or "webm" or "mp3" or "m4a" or "wav";
     }
 
     private static string NormalizeFormat(string format)
@@ -982,7 +1022,7 @@ public class YtDlpClient : IYtDlpClient
         try
         {
             var ytDlpPath = GetYtDlpPath();
-            var output = await RunYtDlpAsync(ytDlpPath, "--version", cancellationToken);
+            var output = await RunYtDlpAsync(ytDlpPath, new[] { "--version" }, cancellationToken);
             return string.IsNullOrWhiteSpace(output) ? null : output.Trim();
         }
         catch
@@ -1034,35 +1074,19 @@ public class YtDlpClient : IYtDlpClient
     {
         // --update-to <channel> は stable/nightly 間の切り替え（ダウングレード含む）に対応する。
         // 単なる -U は現在のチャンネル内でしか更新しないため、nightlyへ切り替えるにはこちらを使う。
-        var psi = new ProcessStartInfo
-        {
-            FileName = ytDlpPath,
-            Arguments = $"--update-to {channel}",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = StdErrEncoding
-        };
-
-        using var process = new Process { StartInfo = psi };
-        process.Start();
-
-        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        await Task.WhenAll(outputTask, errorTask);
-        await process.WaitForExitAsync(cancellationToken);
+        var (stdout, stderr, exitCode) = await RunYtDlpRawAsync(
+            ytDlpPath,
+            new[] { "--update-to", channel },
+            cancellationToken);
 
         var output = string.Join(
             Environment.NewLine,
-            new[] { outputTask.Result, errorTask.Result }.Where(text => !string.IsNullOrWhiteSpace(text)));
+            new[] { stdout, stderr }.Where(text => !string.IsNullOrWhiteSpace(text)));
 
         return new YtDlpUpdateResult
         {
-            IsSuccess = process.ExitCode == 0,
-            Message = process.ExitCode == 0 ? BuildUpdateSuccessMessage(output) : "yt-dlpの更新に失敗しました。",
+            IsSuccess = exitCode == 0,
+            Message = exitCode == 0 ? BuildUpdateSuccessMessage(output) : "yt-dlpの更新に失敗しました。",
             Output = output
         };
     }
@@ -1083,6 +1107,22 @@ public class YtDlpClient : IYtDlpClient
         }
 
         return "yt-dlpの更新チェックが完了しました。";
+    }
+
+    private static string BuildOutputPath(string saveFolderPath, string template)
+    {
+        var root = Path.GetFullPath(saveFolderPath);
+        var fullPath = Path.GetFullPath(Path.Combine(root, template));
+        var rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+
+        if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("ファイル名テンプレートが保存先フォルダ外を指しています。テンプレートから絶対パスや '..' を削除してください。");
+        }
+
+        return fullPath;
     }
 
     private static string BuildFilenameTemplate(string template, DownloadJob job)
@@ -1133,8 +1173,8 @@ public class YtDlpClient : IYtDlpClient
             var percentIndex = line.IndexOf('%');
             if (percentIndex > 0)
             {
-                var start = line.LastIndexOf(' ', percentIndex - 1) + 1;
-                if (start < 0) start = line.IndexOf(']') + 1;
+                var lastSpaceIndex = line.LastIndexOf(' ', percentIndex - 1);
+                var start = lastSpaceIndex >= 0 ? lastSpaceIndex + 1 : line.IndexOf(']') + 1;
                 var percentStr = line.Substring(start, percentIndex - start).Trim();
                 if (double.TryParse(percentStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var percent))
                 {
@@ -1185,7 +1225,7 @@ public class YtDlpClient : IYtDlpClient
         return null;
     }
 
-    private static async Task<string> RunYtDlpAsync(string ytDlpPath, string arguments, CancellationToken cancellationToken)
+    private static async Task<string> RunYtDlpAsync(string ytDlpPath, IEnumerable<string> arguments, CancellationToken cancellationToken)
     {
         var (stdout, _, _) = await RunYtDlpRawAsync(ytDlpPath, arguments, cancellationToken);
         return stdout;
@@ -1195,22 +1235,13 @@ public class YtDlpClient : IYtDlpClient
     /// yt-dlpを実行し、標準出力・標準エラー・終了コードをまとめて返す。
     /// stderrはエラー理由の表示に使うため、ANSIコードページでデコードして文字化けを防ぐ。
     /// </summary>
-    private static async Task<(string StdOut, string StdErr, int ExitCode)> RunYtDlpRawAsync(string ytDlpPath, string arguments, CancellationToken cancellationToken)
+    private static async Task<(string StdOut, string StdErr, int ExitCode)> RunYtDlpRawAsync(string ytDlpPath, IEnumerable<string> arguments, CancellationToken cancellationToken)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = ytDlpPath,
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = StdErrEncoding
-        };
+        var psi = CreateYtDlpStartInfo(ytDlpPath, arguments);
 
         using var process = new Process { StartInfo = psi };
         process.Start();
+        using var killRegistration = RegisterProcessKillOnCancellation(process, cancellationToken);
 
         // stderrも同時に読み取る。リダイレクトしたまま読まないと、
         // 警告などでパイプバッファが満杯になった時点でyt-dlpがブロックしハングする。
@@ -1221,6 +1252,64 @@ public class YtDlpClient : IYtDlpClient
         await process.WaitForExitAsync(cancellationToken);
 
         return (outputTask.Result, errorTask.Result, process.ExitCode);
+    }
+
+    private static ProcessStartInfo CreateYtDlpStartInfo(string ytDlpPath, IEnumerable<string> arguments)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = ytDlpPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = StdErrEncoding
+        };
+
+        foreach (var argument in arguments)
+        {
+            psi.ArgumentList.Add(argument);
+        }
+
+        return psi;
+    }
+
+    private static CancellationTokenRegistration RegisterProcessKillOnCancellation(Process process, CancellationToken cancellationToken)
+    {
+        return cancellationToken.Register(() => KillProcessTree(process));
+    }
+
+    private static void KillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // The process may already be gone.
+        }
+    }
+
+    private static string FormatArgumentsForLog(IEnumerable<string> arguments)
+    {
+        return string.Join(" ", arguments.Select(QuoteArgumentForLog));
+    }
+
+    private static string QuoteArgumentForLog(string argument)
+    {
+        if (argument.Length == 0)
+        {
+            return "\"\"";
+        }
+
+        return argument.Any(char.IsWhiteSpace) || argument.Contains('"')
+            ? $"\"{argument.Replace("\\", "\\\\").Replace("\"", "\\\"")}\""
+            : argument;
     }
 
     /// <summary>

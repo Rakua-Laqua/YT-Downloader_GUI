@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <Version>3.0.2</Version>
-    <PostBuildCopyOutputDir>C:\Users\Rakua\Documents\自作アプリ\YouTubeDownloader-win-x64</PostBuildCopyOutputDir>
+    <Version>3.0.3</Version>
+    <PostBuildCopyOutputDir Condition="'$(PostBuildCopyOutputDir)' == ''"></PostBuildCopyOutputDir>
   </PropertyGroup>
 
   <ItemGroup>

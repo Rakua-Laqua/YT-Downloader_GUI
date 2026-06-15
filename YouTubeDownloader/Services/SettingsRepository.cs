@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using YouTubeDownloader.Models;
 
@@ -22,6 +23,7 @@ public class SettingsRepository : ISettingsRepository
 {
     private readonly string _settingsFilePath;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly SemaphoreSlim _mutex = new(1, 1);
 
     public event EventHandler<AppSettings>? SettingsSaved;
 
@@ -40,6 +42,7 @@ public class SettingsRepository : ISettingsRepository
 
     public AppSettings Load()
     {
+        _mutex.Wait();
         try
         {
             if (File.Exists(_settingsFilePath))
@@ -52,13 +55,27 @@ public class SettingsRepository : ISettingsRepository
         {
             // 読み込み失敗時はデフォルト設定を返す
         }
+        finally
+        {
+            _mutex.Release();
+        }
+
         return new AppSettings();
     }
 
     public async Task SaveAsync(AppSettings settings)
     {
         var json = JsonSerializer.Serialize(settings, _jsonOptions);
-        await File.WriteAllTextAsync(_settingsFilePath, json);
+        await _mutex.WaitAsync();
+        try
+        {
+            await AtomicFileWriter.WriteAllTextAsync(_settingsFilePath, json);
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+
         SettingsSaved?.Invoke(this, settings);
     }
 }
