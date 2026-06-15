@@ -263,9 +263,9 @@
 
                     <!-- 日付メタデータ設定 -->
                     <StackPanel Margin="0,0,0,20">
-                        <CheckBox Content="ファイルの更新日時を動画の公開日に合わせる"
+                        <CheckBox Content="ファイルの更新日時を動画の公開時刻に合わせる"
                                   IsChecked="{Binding SetFileDateToPublishDate}"/>
-                        <TextBlock Text="ダウンロード後、ファイルの更新日時をYouTubeでの公開日に変更します。"
+                        <TextBlock Text="ダウンロード後、ファイルの更新日時をYouTubeでの公開時刻（分まで）に変更します。時刻情報が無い動画は公開日の0時になります。作成日時は変更しません。"
                                    Foreground="Gray" FontSize="11" Margin="0,5,0,0"
                                    TextWrapping="Wrap"/>
                         <CheckBox Content="メタデータの「年」を公開年に修正する"

@@ -526,16 +526,27 @@ public class YtDlpClient : IYtDlpClient
 
             UpdateLocalFilePath(job, outputPath, requestedFormat);
 
-            // 更新日時のみ公開日に合わせる（作成日時はダウンロード時刻のまま残す）
+            // 更新日時のみ公開時刻に合わせる（作成日時はダウンロード時刻のまま残す）
             if (settings.SetFileDateToPublishDate
                 && uploadDateFile != null
                 && !string.IsNullOrEmpty(job.VideoMetadata.LocalFilePath)
                 && File.Exists(job.VideoMetadata.LocalFilePath))
             {
-                var uploadDate = ReadUploadDate(uploadDateFile);
-                if (uploadDate.HasValue)
+                var publishTime = ReadPublishWriteTime(uploadDateFile);
+                if (publishTime.HasValue)
                 {
-                    File.SetLastWriteTime(job.VideoMetadata.LocalFilePath, uploadDate.Value);
+                    // timestamp由来はUTC絶対時刻なのでSetLastWriteTimeUtcで保存する。
+                    // こうするとWindowsは閲覧側PCのローカル時刻に変換して表示する
+                    // （日本で保存→アメリカで見ると現地時刻、の正しい挙動。日本時間に固定はされない）。
+                    // upload_date由来は時刻が無いためローカル0時として保存する。
+                    if (publishTime.Value.Kind == DateTimeKind.Utc)
+                    {
+                        File.SetLastWriteTimeUtc(job.VideoMetadata.LocalFilePath, publishTime.Value);
+                    }
+                    else
+                    {
+                        File.SetLastWriteTime(job.VideoMetadata.LocalFilePath, publishTime.Value);
+                    }
                 }
             }
         }
@@ -574,20 +585,36 @@ public class YtDlpClient : IYtDlpClient
     }
 
     /// <summary>
-    /// yt-dlpが書き出した upload_date 一時ファイルから YYYYMMDD を読み取る。
-    /// 再試行で複数行になり得るため、最初に解釈できた8桁日付を採用する。
+    /// yt-dlpが書き出した公開時刻の一時ファイル（"timestamp|upload_date" 形式）を読み取る。
+    /// timestamp(UNIX秒)があれば分・秒まで含むUTC絶対時刻(Kind=Utc)を返す。
+    /// 無ければ upload_date(YYYYMMDD) のローカル0時(Kind=Unspecified)を返す。
+    /// 再試行で複数行になり得るため、最初に解釈できた行を採用する。
     /// </summary>
-    private static DateTime? ReadUploadDate(string path)
+    private static DateTime? ReadPublishWriteTime(string path)
     {
         try
         {
             foreach (var line in File.ReadAllLines(path))
             {
-                var token = line.Trim();
-                if (token.Length == 8
-                    && DateTime.TryParseExact(token, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+                var parts = line.Trim().Split('|');
+
+                // 1) timestamp(UNIX秒) を最優先。"NA"や空はスキップ。
+                if (parts.Length >= 1
+                    && long.TryParse(parts[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var epoch)
+                    && epoch > 0)
                 {
-                    return parsed;
+                    return DateTimeOffset.FromUnixTimeSeconds(epoch).UtcDateTime; // Kind=Utc
+                }
+
+                // 2) upload_date(YYYYMMDD) にフォールバック（時刻なし→ローカル0時）。
+                if (parts.Length >= 2)
+                {
+                    var dateToken = parts[1].Trim();
+                    if (dateToken.Length == 8
+                        && DateTime.TryParseExact(dateToken, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate))
+                    {
+                        return parsedDate; // Kind=Unspecified（ローカル扱い）
+                    }
                 }
             }
         }
@@ -670,13 +697,14 @@ public class YtDlpClient : IYtDlpClient
             args.Add("%(upload_date>%Y)s:%(meta_date)s");
         }
 
-        // ファイル更新日時を公開日に合わせる場合、yt-dlpの upload_date(YYYYMMDD) を
-        // 一時ファイルへ書き出し、ダウンロード完了後にC#側で読み取って設定する。
+        // ファイル更新日時を公開時刻に合わせる場合、yt-dlpの公開時刻を一時ファイルへ書き出し、
+        // ダウンロード完了後にC#側で読み取って設定する。
+        // timestamp(UNIX秒, UTC絶対時刻) を優先し、無い動画は upload_date(日付のみ) にフォールバックする。
         // after_move: は最終ファイル移動後に走り、--print と違い --simulate を誘発しない。
         if (settings.SetFileDateToPublishDate && !string.IsNullOrEmpty(uploadDateFile))
         {
             args.Add("--print-to-file");
-            args.Add("after_move:%(upload_date)s");
+            args.Add("after_move:%(timestamp)s|%(upload_date)s");
             args.Add(uploadDateFile);
         }
 
