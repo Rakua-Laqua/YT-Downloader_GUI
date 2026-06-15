@@ -320,7 +320,12 @@ function Resolve-AssetPaths {
 }
 
 function Get-DefaultAssetGlob {
-    return @("artifacts\dist\$Runtime\*.zip", "artifacts\dist\$Runtime\*.msi", "artifacts\dist\$Runtime\*.exe", "artifacts\dist\$Runtime\*.7z")
+    return @(
+        "artifacts\dist\$Runtime\*v$baseVersion*.zip",
+        "artifacts\dist\$Runtime\*v$baseVersion*.msi",
+        "artifacts\dist\$Runtime\*v$baseVersion*.exe",
+        "artifacts\dist\$Runtime\*v$baseVersion*.7z"
+    )
 }
 
 function Format-AssetName {
