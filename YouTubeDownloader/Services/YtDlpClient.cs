@@ -773,8 +773,12 @@ public class YtDlpClient : IYtDlpClient
         args.Add("--no-warnings");
 
         // JSチャレンジ解決用のランタイムを指定（DenoとNode.jsを優先）
+        // --js-runtimes はカンマ区切り不可。runtimeごとに指定する必要がある。
+        // 未インストールのランタイムは警告なしでスキップされ、使えるものへ順にフォールバックする。
         args.Add("--js-runtimes");
-        args.Add("deno,node");
+        args.Add("deno");
+        args.Add("--js-runtimes");
+        args.Add("node");
 
         // URL
         args.Add(job.VideoMetadata.Url);
@@ -867,12 +871,34 @@ public class YtDlpClient : IYtDlpClient
         // 出力を読み取りながら進捗を報告
         var outputTask = Task.Run(async () =>
         {
+            string currentPhaseStatus = "動画データダウンロード中"; // デフォルト
             while (!process.StandardOutput.EndOfStream)
             {
                 var line = await process.StandardOutput.ReadLineAsync();
                 if (line == null)
                 {
                     continue;
+                }
+
+                // 保存先ファイル名から、動画か音声かを切り替える
+                if (line.Contains("[download] Destination:"))
+                {
+                    var lowerLine = line.ToLowerInvariant();
+                    if (lowerLine.Contains(".m4a")
+                        || lowerLine.Contains(".mp3")
+                        || lowerLine.Contains(".opus")
+                        || lowerLine.Contains(".wav")
+                        || lowerLine.Contains(".f140")
+                        || lowerLine.Contains(".f251")
+                        || lowerLine.Contains(".f250")
+                        || lowerLine.Contains(".f249"))
+                    {
+                        currentPhaseStatus = "音声データダウンロード中";
+                    }
+                    else
+                    {
+                        currentPhaseStatus = "動画データダウンロード中";
+                    }
                 }
 
                 // 音声変換(ExtractAudio)開始を検知したら、ffmpegの進捗ファイルのポーリングを開始する。
@@ -890,6 +916,11 @@ public class YtDlpClient : IYtDlpClient
                     var progressInfo = ParseProgressLine(line);
                     if (progressInfo != null)
                     {
+                        // デフォルトのメッセージを現在フェーズに上書き
+                        if (progressInfo.Status == "ダウンロード中")
+                        {
+                            progressInfo.Status = currentPhaseStatus;
+                        }
                         progress.Report(progressInfo);
                     }
                 }
@@ -1359,7 +1390,7 @@ public class YtDlpClient : IYtDlpClient
 
         if (line.Contains("[Merger]"))
         {
-            return new ProgressInfo { Status = "変換中...", Percentage = 99, IsPostProcessing = true };
+            return new ProgressInfo { Status = "マージ中...", Percentage = 99, IsPostProcessing = true };
         }
 
         return null;
