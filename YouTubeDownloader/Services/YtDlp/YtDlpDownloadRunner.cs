@@ -42,6 +42,9 @@ internal static class YtDlpDownloadRunner
         var lastPhase = "(処理開始前)";
 
         // 出力を読み取りながら進捗を報告
+        var outputSummary = new StringBuilder();
+        var outputSummaryLines = new HashSet<string>(StringComparer.Ordinal);
+        var outputDiagnostics = new StringBuilder();
         var outputTask = Task.Run(async () =>
         {
             string currentPhaseStatus = "動画データダウンロード中"; // デフォルト
@@ -52,6 +55,9 @@ internal static class YtDlpDownloadRunner
                 {
                     continue;
                 }
+
+                AppendSummaryLine(outputSummary, outputSummaryLines, line);
+                AppendDiagnosticLine(outputDiagnostics, line);
 
                 // 現在フェーズを判定し、失敗フェーズ追跡と進捗の現在フェーズ表示を更新する
                 var detectedPhase = DetectPhaseName(line);
@@ -128,9 +134,67 @@ internal static class YtDlpDownloadRunner
         {
             ExitCode = process.ExitCode,
             StdErr = errorOutput.ToString(),
+            StdOutSummary = outputSummary.ToString(),
+            StdOutDiagnostics = outputDiagnostics.ToString(),
             LastPhase = lastPhase,
             Elapsed = stopwatch.Elapsed
         };
+    }
+
+    private static void AppendSummaryLine(StringBuilder outputSummary, HashSet<string> outputSummaryLines, string line)
+    {
+        if (!IsSummaryOutputLine(line))
+        {
+            return;
+        }
+
+        if (outputSummary.Length > 8_000 || !outputSummaryLines.Add(line))
+        {
+            return;
+        }
+
+        outputSummary.AppendLine(line);
+    }
+
+    private static bool IsSummaryOutputLine(string line)
+    {
+        return (line.StartsWith("[info]", StringComparison.OrdinalIgnoreCase)
+                && line.Contains("Downloading", StringComparison.OrdinalIgnoreCase)
+                && line.Contains("format(s)", StringComparison.OrdinalIgnoreCase))
+            || line.Contains("[download] Destination:", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("has already been downloaded", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("[Merger] Merging formats into", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("[ExtractAudio] Destination:", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("[MoveFiles] Moving file", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AppendDiagnosticLine(StringBuilder outputDiagnostics, string line)
+    {
+        if (!IsDiagnosticOutputLine(line))
+        {
+            return;
+        }
+
+        // 同じタイムアウト行が大量に出てもログを肥大化させない。
+        if (outputDiagnostics.Length > 12_000)
+        {
+            return;
+        }
+
+        outputDiagnostics.AppendLine(line);
+    }
+
+    private static bool IsDiagnosticOutputLine(string line)
+    {
+        return line.Contains("Got error", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("Retrying", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("HTTP Error", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("Read timed out", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("bytes read", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("more expected", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("Unable to download", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("fragment", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

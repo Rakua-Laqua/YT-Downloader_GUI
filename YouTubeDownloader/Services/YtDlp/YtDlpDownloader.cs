@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using YouTubeDownloader.Models;
@@ -100,13 +101,17 @@ internal sealed class YtDlpDownloader
             conversionProgressFile,
             downloadInfoFile);
 
+        var processStartedAtUtc = DateTime.UtcNow;
+        var firstRunFailed = false;
         try
         {
             _logger.Info($"yt-dlp 実行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(arguments)}");
             var firstRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, arguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
+            LogRunSummary(jobLabel, "yt-dlp 初回出力要約", firstRun);
 
             if (firstRun.ExitCode != 0)
             {
+                firstRunFailed = true;
                 _logger.Warn($"yt-dlp 初回失敗 {jobLabel} / 終了コード={firstRun.ExitCode} 失敗フェーズ={firstRun.LastPhase} 経過={firstRun.Elapsed.TotalSeconds:F1}秒。フォールバックclientで再試行します。");
 
                 // 403 や UNPLAYABLE（「この動画は…」）はデフォルトclientの問題であることが多い。
@@ -115,11 +120,12 @@ internal sealed class YtDlpDownloader
 
                 _logger.Info($"yt-dlp 再試行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(retryArguments)}");
                 var retryRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
+                LogRunSummary(jobLabel, "yt-dlp 再試行出力要約", retryRun);
 
                 if (retryRun.ExitCode != 0)
                 {
-                    var firstReason = YtDlpFailureFormatter.ExtractMeaningfulError(firstRun.StdErr);
-                    var retryReason = YtDlpFailureFormatter.ExtractMeaningfulError(retryRun.StdErr);
+                    var firstReason = YtDlpFailureFormatter.ExtractMeaningfulError(firstRun);
+                    var retryReason = YtDlpFailureFormatter.ExtractMeaningfulError(retryRun);
 
                     // 失敗の「どのタイミングで・なぜ」が後から追えるよう、両試行の終了コード・失敗フェーズ・
                     // 経過時間・実行コマンド・stderr全文・yt-dlpバージョンをまとめて記録する。
@@ -133,6 +139,9 @@ internal sealed class YtDlpDownloader
                 }
 
                 _logger.Info($"yt-dlp 再試行成功 {jobLabel} / 経過={retryRun.Elapsed.TotalSeconds:F1}秒");
+                _logger.Warn(
+                    $"yt-dlp 初回失敗診断 {jobLabel}{Environment.NewLine}" +
+                    YtDlpFailureFormatter.BuildAttemptDiagnosticDetail("初回試行", arguments, firstRun));
             }
 
             var infoResult = YtDlpOutputPathResolver.ReadDownloadInfoFile(downloadInfoFile);
@@ -169,6 +178,8 @@ internal sealed class YtDlpDownloader
             }
 
             _logger.Info($"ダウンロード成功 {jobLabel} / 出力=\"{job.VideoMetadata.LocalFilePath}\"");
+
+            CleanupFallbackLeftovers(jobLabel, outputPath, requestedFormat, firstRunFailed, processStartedAtUtc);
         }
         finally
         {
@@ -202,6 +213,114 @@ internal sealed class YtDlpDownloader
                 }
             }
         }
+    }
+
+    private void LogRunSummary(string jobLabel, string label, YtDlpRunResult run)
+    {
+        if (string.IsNullOrWhiteSpace(run.StdOutSummary))
+        {
+            return;
+        }
+
+        _logger.Info(
+            $"{label} {jobLabel} / 終了コード={run.ExitCode} 経過={run.Elapsed.TotalSeconds:F1}秒{Environment.NewLine}" +
+            run.StdOutSummary.TrimEnd());
+    }
+
+    private void CleanupFallbackLeftovers(
+        string jobLabel,
+        string outputPath,
+        string requestedFormat,
+        bool firstRunFailed,
+        DateTime processStartedAtUtc)
+    {
+        if (!firstRunFailed)
+        {
+            return;
+        }
+
+        var outputDirectory = Path.GetDirectoryName(outputPath);
+        var outputFileName = Path.GetFileName(outputPath);
+        if (string.IsNullOrEmpty(outputDirectory)
+            || string.IsNullOrEmpty(outputFileName)
+            || !Directory.Exists(outputDirectory))
+        {
+            return;
+        }
+
+        var outputBaseName = GetOutputBaseName(outputFileName, requestedFormat);
+        if (string.IsNullOrEmpty(outputBaseName))
+        {
+            return;
+        }
+
+        string[] candidates;
+        try
+        {
+            candidates = Directory.GetFiles(outputDirectory, $"{outputBaseName}.f*");
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"yt-dlp 中間ファイル確認失敗 {jobLabel} / dir=\"{outputDirectory}\" / {ex.GetType().Name}: {ex.Message}");
+            return;
+        }
+
+        foreach (var path in candidates)
+        {
+            var file = new FileInfo(path);
+            if (!IsYtDlpIntermediateFile(file, outputBaseName, processStartedAtUtc))
+            {
+                continue;
+            }
+
+            try
+            {
+                var length = file.Length;
+                file.Delete();
+                _logger.Info($"yt-dlp 中間ファイル削除 {jobLabel} / path=\"{file.FullName}\" size={length}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn($"yt-dlp 中間ファイル削除失敗 {jobLabel} / path=\"{file.FullName}\" / {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
+    private static string GetOutputBaseName(string outputFileName, string requestedFormat)
+    {
+        if (outputFileName.EndsWith(".%(ext)s", StringComparison.OrdinalIgnoreCase))
+        {
+            return outputFileName[..^".%(ext)s".Length];
+        }
+
+        var requestedExtension = "." + requestedFormat.TrimStart('.');
+        return outputFileName.EndsWith(requestedExtension, StringComparison.OrdinalIgnoreCase)
+            ? outputFileName[..^requestedExtension.Length]
+            : Path.GetFileNameWithoutExtension(outputFileName);
+    }
+
+    private static bool IsYtDlpIntermediateFile(FileInfo file, string outputBaseName, DateTime processStartedAtUtc)
+    {
+        var name = file.Name;
+        if (!name.StartsWith(outputBaseName + ".f", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var suffix = name[(outputBaseName.Length + 2)..];
+        var dotIndex = suffix.IndexOf('.');
+        if (dotIndex <= 0)
+        {
+            return false;
+        }
+
+        if (!suffix[..dotIndex].All(char.IsDigit))
+        {
+            return false;
+        }
+
+        var lowerBound = processStartedAtUtc.AddMinutes(-1);
+        return file.CreationTimeUtc >= lowerBound || file.LastWriteTimeUtc >= lowerBound;
     }
 
     /// <summary>

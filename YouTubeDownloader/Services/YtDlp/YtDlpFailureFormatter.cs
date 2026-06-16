@@ -38,6 +38,28 @@ internal static class YtDlpFailureFormatter
         return string.Join(Environment.NewLine, chosen);
     }
 
+    public static string ExtractMeaningfulError(YtDlpRunResult run)
+    {
+        var stderrReason = ExtractMeaningfulError(run.StdErr);
+        if (stderrReason != "原因不明のエラーが発生しました。")
+        {
+            return stderrReason;
+        }
+
+        if (string.IsNullOrWhiteSpace(run.StdOutDiagnostics))
+        {
+            return stderrReason;
+        }
+
+        var lines = run.StdOutDiagnostics
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .TakeLast(6);
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
     /// <summary>ログ行に付けるジョブ識別ラベル（タイトルとURL）を作る</summary>
     public static string BuildJobLabel(DownloadJob job)
     {
@@ -83,6 +105,13 @@ internal static class YtDlpFailureFormatter
         return sb.ToString().TrimEnd();
     }
 
+    public static string BuildAttemptDiagnosticDetail(string label, IReadOnlyList<string> arguments, YtDlpRunResult run)
+    {
+        var sb = new StringBuilder();
+        AppendAttemptDetail(sb, label, arguments, run);
+        return sb.ToString().TrimEnd();
+    }
+
     private static string QuoteArgumentForLog(string argument)
     {
         if (argument.Length == 0)
@@ -112,6 +141,10 @@ internal static class YtDlpFailureFormatter
         sb.AppendLine($"終了コード: {run.ExitCode}");
         sb.AppendLine($"経過時間: {run.Elapsed.TotalSeconds:F1}秒");
         sb.AppendLine($"実行コマンド: {FormatArgumentsForLog(arguments)}");
+        sb.AppendLine("stdout要約:");
+        sb.AppendLine(IndentBlock(run.StdOutSummary));
+        sb.AppendLine("stdout診断:");
+        sb.AppendLine(IndentBlock(run.StdOutDiagnostics));
         sb.AppendLine("stderr:");
         sb.Append(IndentBlock(run.StdErr));
     }
