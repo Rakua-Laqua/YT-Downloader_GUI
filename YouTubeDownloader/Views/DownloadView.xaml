@@ -320,6 +320,11 @@
                                                 Command="{Binding RetryCommand}"
                                                 Visibility="{Binding CanRetry, Converter={StaticResource BoolToVis}}"
                                                 MinWidth="100" Padding="10,5"/>
+                                            <Button Content="失敗詳細をコピー"
+                                                Command="{Binding CopyFailureDetailCommand}"
+                                                Visibility="{Binding HasFailureDetail, Converter={StaticResource BoolToVis}}"
+                                                ToolTip="失敗フェーズ・終了コード・stderr全文などをクリップボードへコピーします"
+                                                MinWidth="100" Padding="10,5" Margin="0,5,0,0"/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>

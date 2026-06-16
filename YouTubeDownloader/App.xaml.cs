@@ -22,6 +22,9 @@ public partial class App : Application
 
     private static void ConfigureServices(IServiceCollection services)
     {
+        // 基盤
+        services.AddSingleton<ILoggingService, LoggingService>();
+
         // リポジトリ
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
         services.AddSingleton<IMetadataRepository, MetadataRepository>();

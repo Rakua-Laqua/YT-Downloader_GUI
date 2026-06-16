@@ -59,6 +59,12 @@ public partial class DownloadJobViewModel : ObservableObject
     public bool CanCancel => Status == DownloadStatus.Pending || Status == DownloadStatus.Running;
     public bool CanRetry => Status == DownloadStatus.Failed || Status == DownloadStatus.Canceled;
 
+    /// <summary>失敗時の詳細（フェーズ・終了コード・stderr全文など）。ログと同一内容。</summary>
+    public string? FailureDetail => _job.FailureDetail;
+
+    /// <summary>「失敗詳細をコピー」ボタンを出すか</summary>
+    public bool HasFailureDetail => Status == DownloadStatus.Failed && !string.IsNullOrWhiteSpace(_job.FailureDetail);
+
     [RelayCommand]
     private void Cancel()
     {
@@ -71,6 +77,24 @@ public partial class DownloadJobViewModel : ObservableObject
         _retryAction?.Invoke(_job.Id);
     }
 
+    [RelayCommand]
+    private void CopyFailureDetail()
+    {
+        if (string.IsNullOrWhiteSpace(_job.FailureDetail))
+        {
+            return;
+        }
+
+        try
+        {
+            System.Windows.Clipboard.SetText(_job.FailureDetail);
+        }
+        catch
+        {
+            // クリップボードが他プロセスにロックされている場合などは無視する
+        }
+    }
+
     public void UpdateFromJob()
     {
         Status = _job.Status;
@@ -81,5 +105,7 @@ public partial class DownloadJobViewModel : ObservableObject
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(CanCancel));
         OnPropertyChanged(nameof(CanRetry));
+        OnPropertyChanged(nameof(FailureDetail));
+        OnPropertyChanged(nameof(HasFailureDetail));
     }
 }

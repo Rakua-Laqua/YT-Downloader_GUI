@@ -61,6 +61,12 @@ public class DownloadJob
     /// <summary>エラーメッセージ</summary>
     public string? ErrorMessage { get; set; }
 
+    /// <summary>
+    /// 失敗時の詳細（失敗フェーズ・終了コード・実行コマンド・stderr全文など）。
+    /// ログファイルへ出力するのと同じ内容を保持し、UIから「失敗詳細をコピー」できるようにする。
+    /// </summary>
+    public string? FailureDetail { get; set; }
+
     /// <summary>ダウンロード開始時刻</summary>
     public DateTime? StartedAt { get; set; }
 
