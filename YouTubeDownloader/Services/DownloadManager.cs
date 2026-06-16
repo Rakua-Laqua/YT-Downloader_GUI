@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using YouTubeDownloader.Models;
@@ -34,6 +35,7 @@ public class DownloadManager : IDownloadManager, IDisposable
     private readonly IYtDlpClient _ytDlpClient;
     private readonly IMetadataRepository _metadataRepository;
     private readonly ISettingsRepository _settingsRepository;
+    private readonly ILoggingService _logger;
     private readonly List<DownloadJob> _allJobs = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _cancellationTokens = new();
     private readonly SemaphoreSlim _semaphore;
@@ -50,11 +52,12 @@ public class DownloadManager : IDownloadManager, IDisposable
     public event EventHandler<DownloadJobEventArgs>? JobProgressChanged;
     public event EventHandler<DownloadJobEventArgs>? JobStatusChanged;
 
-    public DownloadManager(IYtDlpClient ytDlpClient, IMetadataRepository metadataRepository, ISettingsRepository settingsRepository)
+    public DownloadManager(IYtDlpClient ytDlpClient, IMetadataRepository metadataRepository, ISettingsRepository settingsRepository, ILoggingService logger)
     {
         _ytDlpClient = ytDlpClient;
         _metadataRepository = metadataRepository;
         _settingsRepository = settingsRepository;
+        _logger = logger;
 
         _maxConcurrency = ClampConcurrency(_settingsRepository.Load().MaxConcurrentDownloads);
         // 動的に許可数を増減できるよう、上限を固定しない形で生成する
@@ -160,16 +163,20 @@ public class DownloadManager : IDownloadManager, IDisposable
             }
         }
 
+        // 「どのタイミングで」を追えるよう、キュー待機(セマフォ取得)にかかった時間も記録する
+        var waitStopwatch = Stopwatch.StartNew();
         try
         {
             await _semaphore.WaitAsync(cts.Token);
             semaphoreAcquired = true;
             cts.Token.ThrowIfCancellationRequested();
+            waitStopwatch.Stop();
 
             job.Status = DownloadStatus.Running;
             job.StartedAt = DateTime.Now;
             job.Progress = 0;
             job.IsPostProcessing = false;
+            _logger.Info($"ジョブ開始 [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}> / キュー待機 {waitStopwatch.Elapsed.TotalSeconds:F1}秒");
             JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
 
             var progress = new Progress<ProgressInfo>(info =>
@@ -201,6 +208,7 @@ public class DownloadManager : IDownloadManager, IDisposable
         }
         catch (OperationCanceledException)
         {
+            _logger.Info($"ジョブをキャンセルしました [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>");
             var shouldNotify = job.Status != DownloadStatus.Canceled;
             job.Status = DownloadStatus.Canceled;
             if (shouldNotify)
@@ -210,6 +218,10 @@ public class DownloadManager : IDownloadManager, IDisposable
         }
         catch (Exception ex)
         {
+            // yt-dlp固有の失敗詳細は YtDlpClient 側で記録済み。ここは呼び出し境界として、
+            // 例外の型とスタックトレース(=どのC#処理で発生したか)を残す。
+            // 例: メタデータ保存の失敗もここに来るため、スタックトレースで発生箇所を特定できる。
+            _logger.Error($"ジョブ失敗 [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
             job.Status = DownloadStatus.Failed;
             job.ErrorMessage = ex.Message;
             JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
