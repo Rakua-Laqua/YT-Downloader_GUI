@@ -230,7 +230,10 @@ public class DownloadManager : IDownloadManager, IDisposable
         {
             lock (_lock)
             {
-                _cancellationTokens.Remove(job.Id);
+                if (_cancellationTokens.TryGetValue(job.Id, out var currentCts) && ReferenceEquals(currentCts, cts))
+                {
+                    _cancellationTokens.Remove(job.Id);
+                }
             }
             cts.Dispose();
             if (semaphoreAcquired)
@@ -292,6 +295,7 @@ public class DownloadManager : IDownloadManager, IDisposable
 
     public void Retry(Guid jobId)
     {
+        DownloadJob? jobToRetry = null;
         lock (_lock)
         {
             var job = _allJobs.Find(j => j.Id == jobId);
@@ -300,9 +304,14 @@ public class DownloadManager : IDownloadManager, IDisposable
                 job.Status = DownloadStatus.Pending;
                 job.ErrorMessage = null;
                 job.Progress = 0;
-                JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
-                _ = ProcessJobAsync(job);
+                jobToRetry = job;
             }
+        }
+
+        if (jobToRetry != null)
+        {
+            JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(jobToRetry));
+            _ = ProcessJobAsync(jobToRetry);
         }
     }
 

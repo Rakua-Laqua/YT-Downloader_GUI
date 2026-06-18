@@ -16,8 +16,10 @@ public class ThumbnailImageConverter : IValueConverter
 {
     // 一覧サムネは 70x40 表示。高DPI/くっきり表示のため少し余裕を持たせた幅でデコードする。
     private const int DecodePixelWidth = 160;
+    private const int MaxCacheEntries = 256;
 
     private static readonly Dictionary<string, BitmapImage> Cache = new();
+    private static readonly Queue<string> CacheOrder = new();
     private static readonly object SyncRoot = new();
 
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -53,7 +55,14 @@ public class ThumbnailImageConverter : IValueConverter
 
             lock (SyncRoot)
             {
+                if (Cache.TryGetValue(url, out var cached))
+                {
+                    return cached;
+                }
+
                 Cache[url] = bitmap;
+                CacheOrder.Enqueue(url);
+                TrimCache();
             }
 
             return bitmap;
@@ -67,4 +76,13 @@ public class ThumbnailImageConverter : IValueConverter
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotSupportedException();
+
+    private static void TrimCache()
+    {
+        while (Cache.Count > MaxCacheEntries && CacheOrder.Count > 0)
+        {
+            var oldestUrl = CacheOrder.Dequeue();
+            Cache.Remove(oldestUrl);
+        }
+    }
 }

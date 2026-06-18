@@ -298,9 +298,33 @@
                                                                   CommandParameter="{Binding}"/>
                                                 </TextBlock.InputBindings>
                                             </TextBlock>
-                                            <TextBlock Text="{Binding StatusText}" Foreground="Gray" FontSize="12"
-                                                       TextWrapping="Wrap"
-                                                       ToolTip="{Binding StatusText}"/>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding StatusText}" Foreground="Gray" FontSize="12"
+                                                           TextWrapping="Wrap"
+                                                           ToolTip="{Binding StatusText}"/>
+                                                <!-- 完了時の詳細情報。所要時間・保存先・フォーマット検証結果を表示する -->
+                                                <Border Width="18" Height="18" Margin="4,0,0,0"
+                                                        Background="Transparent" Cursor="Help"
+                                                        VerticalAlignment="Center"
+                                                        Visibility="{Binding HasCompletionInfo, Converter={StaticResource BoolToVis}}"
+                                                        ToolTipService.InitialShowDelay="0"
+                                                        ToolTipService.ShowDuration="60000">
+                                                    <Border.ToolTip>
+                                                        <ToolTip Placement="Mouse" MaxWidth="560">
+                                                            <TextBlock Text="{Binding CompletionInfoTooltip}"
+                                                                       TextWrapping="Wrap"/>
+                                                        </ToolTip>
+                                                    </Border.ToolTip>
+                                                    <TextBlock Text="ⓘ" FontSize="13" Foreground="#1976D2"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center"/>
+                                                </Border>
+                                                <!-- フォーマット不一致警告。ホバーで差異の詳細を表示する -->
+                                                <TextBlock Text="⚠" FontSize="14" Foreground="#F9A825" Margin="4,0,0,0"
+                                                           VerticalAlignment="Center" Cursor="Help"
+                                                           Visibility="{Binding HasFormatMismatch, Converter={StaticResource BoolToVis}}"
+                                                           ToolTip="{Binding FormatMismatchTooltip}"/>
+                                            </StackPanel>
                                         </StackPanel>
 
                                         <!-- 進捗 (変換などの後処理中は不確定アニメで「処理中」を示す) -->

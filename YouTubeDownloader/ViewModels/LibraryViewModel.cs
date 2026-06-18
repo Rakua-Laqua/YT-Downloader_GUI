@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Diagnostics;
@@ -20,6 +21,15 @@ namespace YouTubeDownloader.ViewModels;
 public partial class LibraryViewModel : ViewModelBase
 {
     private readonly IMetadataRepository _metadataRepository;
+    private static readonly HashSet<string> SupportedMediaExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp4",
+        ".mkv",
+        ".webm",
+        ".mp3",
+        ".m4a",
+        ".wav"
+    };
 
     // 一括選択時に項目ごとの通知が大量発生するのを抑え、最後に1回だけ件数を更新するためのフラグ
     private bool _suppressSelectionNotifications;
@@ -197,36 +207,50 @@ public partial class LibraryViewModel : ViewModelBase
     [RelayCommand]
     private void OpenFolder(VideoMetadataViewModel? item)
     {
-        if (item == null || string.IsNullOrEmpty(item.LocalFilePath)) return;
+        if (!TryResolveExistingLocalFile(item?.LocalFilePath, requireSupportedMedia: false, out var localFilePath))
+        {
+            return;
+        }
 
-        var folder = Path.GetDirectoryName(item.LocalFilePath);
+        var folder = Path.GetDirectoryName(localFilePath);
         if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
         {
-            Process.Start(new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = "explorer.exe",
-                Arguments = $"/select,\"{item.LocalFilePath}\"",
-                UseShellExecute = true
-            });
+                UseShellExecute = false
+            };
+            startInfo.ArgumentList.Add($"/select,{localFilePath}");
+            try
+            {
+                Process.Start(startInfo);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"フォルダを開けませんでした: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
     }
 
     [RelayCommand]
     private void PlayFile(VideoMetadataViewModel? item)
     {
-        if (item == null || string.IsNullOrEmpty(item.LocalFilePath)) return;
+        if (!TryResolveExistingLocalFile(item?.LocalFilePath, requireSupportedMedia: true, out var localFilePath))
+        {
+            return;
+        }
 
-        if (File.Exists(item.LocalFilePath))
+        try
         {
             Process.Start(new ProcessStartInfo
             {
-                FileName = item.LocalFilePath,
+                FileName = localFilePath,
                 UseShellExecute = true
             });
         }
-        else
+        catch (Exception ex)
         {
-            MessageBox.Show("ファイルが見つかりません。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show($"ファイルを開けませんでした: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -356,5 +380,38 @@ public partial class LibraryViewModel : ViewModelBase
     public async Task LoadAsync()
     {
         await RefreshAsync();
+    }
+
+    private static bool TryResolveExistingLocalFile(string? path, bool requireSupportedMedia, out string localFilePath)
+    {
+        localFilePath = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            localFilePath = Path.GetFullPath(path);
+        }
+        catch
+        {
+            MessageBox.Show("ファイルパスが不正です。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        if (!File.Exists(localFilePath))
+        {
+            MessageBox.Show("ファイルが見つかりません。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        if (requireSupportedMedia && !SupportedMediaExtensions.Contains(Path.GetExtension(localFilePath)))
+        {
+            MessageBox.Show("対応していないファイル形式のため、アプリからは開けません。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        return true;
     }
 }

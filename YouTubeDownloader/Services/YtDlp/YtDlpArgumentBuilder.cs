@@ -42,7 +42,8 @@ internal static class YtDlpArgumentBuilder
         string requestedFormat,
         string? ffmpegPath,
         string? conversionProgressFile = null,
-        string? downloadInfoFile = null)
+        string? downloadInfoFile = null,
+        string? sourceFormatFile = null)
     {
         var args = new List<string>();
 
@@ -50,7 +51,7 @@ internal static class YtDlpArgumentBuilder
         // 出力テンプレート
         args.Add("-o");
         args.Add(outputPath);
-        args.Add("--force-overwrites");
+        args.Add("--no-overwrites");
         args.AddRange(BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage));
 
         // フォーマット指定
@@ -122,6 +123,19 @@ internal static class YtDlpArgumentBuilder
             args.Add(downloadInfoFile);
         }
 
+        // yt-dlpが実際に選択したソースストリームの情報を一時ファイルへ書き出す。
+        // video: フェーズはフォーマット選択完了後・ダウンロード前に発火する。
+        // %(vcodec)s / %(acodec)s はYouTube側が公開しているソースストリームのコーデックを返すため、
+        // ダウンロード後の実ファイル(ffprobe)と突き合わせて整合性を検証できる。
+        // 備考: %(ext)s は「出力コンテナ」(マージ後の拡張子)を返すため、必ずしもソースコンテナではない。
+        //       コンテナ比較は参考情報程度に扱う。
+        if (!string.IsNullOrEmpty(sourceFormatFile))
+        {
+            args.Add("--print-to-file");
+            args.Add("video:%(ext)s|%(vcodec)s|%(acodec)s");
+            args.Add(sourceFormatFile);
+        }
+
         // サムネイルを埋め込む（音声ファイルの場合はアートワークとして）
         if (requestedFormat == "mp3" || requestedFormat == "m4a")
         {
@@ -138,10 +152,7 @@ internal static class YtDlpArgumentBuilder
             }
         }
 
-        // YouTube対策: User-Agent は指定するが、player_client=web の強制は
-        // SABR でURLが欠落し「Requested format is not available」になり得るため行わない。
-        args.Add("--user-agent");
-        args.Add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        // User-Agent は yt-dlp 側の既定値に任せ、更新に追従する。
 
         // 分割配信(DASH/HLS)のフラグメントを並列ダウンロードして取得を高速化する。
         // mp3/wav は再エンコードが避けられないぶん、ダウンロード時間を詰めて総時間を短縮する。
