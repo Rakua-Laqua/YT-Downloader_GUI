@@ -6,8 +6,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = $PSScriptRoot
+$OutputRoot = (Get-Location).ProviderPath
+$ProjectName = Split-Path -Leaf $OutputRoot
+
 if ([string]::IsNullOrEmpty($OutPath)) {
-    $OutPath = Join-Path $RepoRoot "YT-Downloader_GUI_source.zip"
+    $OutPath = Join-Path $OutputRoot "$($ProjectName)_source.zip"
 }
 
 $TempDir = Join-Path $RepoRoot "temp_source_archive"
