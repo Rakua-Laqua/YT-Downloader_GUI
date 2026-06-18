@@ -38,6 +38,8 @@ bld/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+*_source.zip
+temp_source_archive/
 
 # Visual Studio Code
 .vscode/*

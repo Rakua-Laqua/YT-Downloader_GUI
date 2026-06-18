@@ -59,6 +59,12 @@ public partial class DownloadJobViewModel : ObservableObject
     public bool CanCancel => Status == DownloadStatus.Pending || Status == DownloadStatus.Running;
     public bool CanRetry => Status == DownloadStatus.Failed || Status == DownloadStatus.Canceled;
 
+    /// <summary>フォーマット不一致警告があるか（完了時のみ表示対象）</summary>
+    public bool HasFormatMismatch => Status == DownloadStatus.Completed && _job.HasFormatMismatch;
+
+    /// <summary>フォーマット検証のツールチップ（不一致警告／音声変換情報）</summary>
+    public string? FormatMismatchTooltip => _job.FormatMismatchTooltip;
+
     /// <summary>失敗時の詳細（フェーズ・終了コード・stderr全文など）。ログと同一内容。</summary>
     public string? FailureDetail => _job.FailureDetail;
 
@@ -107,5 +113,7 @@ public partial class DownloadJobViewModel : ObservableObject
         OnPropertyChanged(nameof(CanRetry));
         OnPropertyChanged(nameof(FailureDetail));
         OnPropertyChanged(nameof(HasFailureDetail));
+        OnPropertyChanged(nameof(HasFormatMismatch));
+        OnPropertyChanged(nameof(FormatMismatchTooltip));
     }
 }

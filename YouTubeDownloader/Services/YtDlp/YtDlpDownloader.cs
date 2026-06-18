@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -91,6 +93,9 @@ internal sealed class YtDlpDownloader
         // ダウンロードした正確なファイルパスと公開日時を書き出させる一時ファイル
         string downloadInfoFile = Path.Combine(Path.GetTempPath(), $"ytdlp_info_{job.Id:N}.txt");
 
+        // yt-dlpが選択したソースストリーム(ext/vcodec/acodec)を書き出させる一時ファイル
+        string sourceFormatFile = Path.Combine(Path.GetTempPath(), $"ytdlp_srcfmt_{job.Id:N}.txt");
+
         var ffmpegPath = ResolveFfmpegPath(settings);
         var arguments = YtDlpArgumentBuilder.BuildDownloadArguments(
             job,
@@ -99,7 +104,8 @@ internal sealed class YtDlpDownloader
             requestedFormat,
             ffmpegPath,
             conversionProgressFile,
-            downloadInfoFile);
+            downloadInfoFile,
+            sourceFormatFile);
 
         var processStartedAtUtc = DateTime.UtcNow;
         var firstRunFailed = false;
@@ -179,6 +185,19 @@ internal sealed class YtDlpDownloader
 
             _logger.Info($"ダウンロード成功 {jobLabel} / 出力=\"{job.VideoMetadata.LocalFilePath}\"");
 
+            // ソースフォーマット(yt-dlp選択)と実ファイル(ffprobe)を突き合わせて検証・ログ出力する
+            var sourceFmt = ReadSourceFormat(sourceFormatFile);
+            job.SourceExt = sourceFmt?.Ext;
+            job.SourceVcodec = sourceFmt?.Vcodec;
+            job.SourceAcodec = sourceFmt?.Acodec;
+
+            var actualFmt = await ProbeFileFormatAsync(job.VideoMetadata.LocalFilePath, ffmpegPath);
+            job.ActualExt = actualFmt?.Ext;
+            job.ActualVcodec = actualFmt?.Vcodec;
+            job.ActualAcodec = actualFmt?.Acodec;
+
+            CompareAndLogFormats(job);
+
             CleanupFallbackLeftovers(jobLabel, outputPath, requestedFormat, firstRunFailed, processStartedAtUtc);
         }
         finally
@@ -211,6 +230,18 @@ internal sealed class YtDlpDownloader
                 {
                     // 一時ファイルの削除失敗は無視
                 }
+            }
+
+            try
+            {
+                if (File.Exists(sourceFormatFile))
+                {
+                    File.Delete(sourceFormatFile);
+                }
+            }
+            catch
+            {
+                // 一時ファイルの削除失敗は無視
             }
         }
     }
@@ -351,5 +382,303 @@ internal sealed class YtDlpDownloader
         return !string.IsNullOrEmpty(settings.FfmpegPath) && File.Exists(settings.FfmpegPath)
             ? settings.FfmpegPath
             : _getFfmpegPath();
+    }
+
+    private sealed record SourceFormat(string? Ext, string Vcodec, string Acodec);
+
+    private sealed record ActualFormat(string? Ext, string? Vcodec, string? Acodec);
+
+    /// <summary>
+    /// yt-dlpが書き出したソースフォーマット("ext|vcodec|acodec"形式)を読み取る。
+    /// video:フェーズは再試行で複数行になり得るため、最後の有効行(=最終的に採用された選択)を採用する。
+    /// </summary>
+    private static SourceFormat? ReadSourceFormat(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var line = File.ReadAllLines(path).LastOrDefault(l => !string.IsNullOrWhiteSpace(l));
+            if (string.IsNullOrEmpty(line))
+            {
+                return null;
+            }
+
+            var parts = line.Split('|');
+            var ext = parts.Length > 0 ? parts[0].Trim() : null;
+            return new SourceFormat(
+                Ext: string.IsNullOrEmpty(ext) ? null : ext,
+                Vcodec: parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]) ? parts[1].Trim() : "none",
+                Acodec: parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2]) ? parts[2].Trim() : "none");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// ffprobeで実ファイルの動画・音声コーデックを取得する。ffmpegと同ディレクトリのffprobeを想定。
+    /// 動画・音声を1回のプロセスで取得する(codec_type,codec_nameのCSV)。
+    /// ffprobeが無い場合は拡張子のみ返す。
+    /// </summary>
+    private async Task<ActualFormat?> ProbeFileFormatAsync(string? filePath, string? ffmpegPath)
+    {
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+        {
+            return null;
+        }
+
+        var ext = Path.GetExtension(filePath).TrimStart('.').ToLowerInvariant();
+
+        var ffprobePath = ResolveFfprobePath(ffmpegPath);
+        if (string.IsNullOrEmpty(ffprobePath) || !File.Exists(ffprobePath))
+        {
+            // ffprobeが無い場合はコンテナ(拡張子)のみで比較する
+            return new ActualFormat(ext, null, null);
+        }
+
+        try
+        {
+            // 各ストリームを codec と type のCSVで1回だけ取得する。
+            // ffprobeは -show_entries の指定順と異なる列順で返すことがあるため、
+            // 後段のパースでは video/audio がどちらの列にあるかを見て判定する。
+            // 例:
+            //   h264,video
+            //   aac,audio
+            var psi = new ProcessStartInfo
+            {
+                FileName = ffprobePath,
+                Arguments = $"-v error -show_entries stream=codec_type,codec_name -of csv=p=0 \"{filePath}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(psi);
+            if (process == null)
+            {
+                return new ActualFormat(ext, null, null);
+            }
+
+            var output = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync(CancellationToken.None);
+
+            string? vcodec = null;
+            string? acodec = null;
+            foreach (var rawLine in output.Split('\n'))
+            {
+                var line = rawLine.Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                if (!TryParseFfprobeCodecLine(line, out var type, out var codec))
+                {
+                    continue;
+                }
+
+                if (type == "video" && vcodec == null)
+                {
+                    vcodec = codec;
+                }
+                else if (type == "audio" && acodec == null)
+                {
+                    acodec = codec;
+                }
+            }
+
+            return new ActualFormat(
+                ext,
+                string.IsNullOrEmpty(vcodec) ? "none" : vcodec,
+                string.IsNullOrEmpty(acodec) ? "none" : acodec);
+        }
+        catch
+        {
+            return new ActualFormat(ext, null, null);
+        }
+    }
+
+    private static bool TryParseFfprobeCodecLine(string line, out string type, out string codec)
+    {
+        type = string.Empty;
+        codec = string.Empty;
+
+        var fields = line.Split(',');
+        if (fields.Length < 2)
+        {
+            return false;
+        }
+
+        var first = fields[0].Trim();
+        var second = fields[1].Trim();
+        if (IsMediaStreamType(first))
+        {
+            type = first.ToLowerInvariant();
+            codec = second;
+            return !string.IsNullOrEmpty(codec);
+        }
+
+        if (IsMediaStreamType(second))
+        {
+            type = second.ToLowerInvariant();
+            codec = first;
+            return !string.IsNullOrEmpty(codec);
+        }
+
+        return false;
+    }
+
+    private static bool IsMediaStreamType(string value)
+    {
+        return value.Equals("video", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("audio", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? ResolveFfprobePath(string? ffmpegPath)
+    {
+        if (string.IsNullOrEmpty(ffmpegPath))
+        {
+            return null;
+        }
+
+        var dir = Path.GetDirectoryName(ffmpegPath);
+        if (string.IsNullOrEmpty(dir))
+        {
+            return null;
+        }
+
+        return Path.Combine(dir, "ffprobe.exe");
+    }
+
+    /// <summary>
+    /// yt-dlp / ffprobe でのコーデック名表記差を吸収して比較可能にする。
+    /// </summary>
+    private static string NormalizeCodec(string? codec)
+    {
+        if (string.IsNullOrWhiteSpace(codec))
+        {
+            return "none";
+        }
+
+        var c = codec.ToLowerInvariant().Trim();
+
+        // 動画コーデック
+        if (c.StartsWith("avc1") || c == "h264") return "h264";
+        if (c.StartsWith("hev1") || c.StartsWith("hvc1") || c == "hevc" || c == "h265") return "hevc";
+        if (c.StartsWith("av01") || c == "av1") return "av1";
+        if (c.StartsWith("vp9") || c == "vp09") return "vp9";
+        if (c.StartsWith("vp8") || c == "vp08") return "vp8";
+
+        // 音声コーデック
+        if (c.StartsWith("mp4a") || c == "aac") return "aac";
+        if (c == "opus") return "opus";
+        if (c == "vorbis") return "vorbis";
+        if (c == "mp3" || c == "mp3float") return "mp3";
+        if (c.StartsWith("ac-3") || c == "ac3") return "ac3";
+
+        if (c == "none" || c == "null") return "none";
+        return c;
+    }
+
+    /// <summary>
+    /// ソース(yt-dlp選択)と実ファイル(ffprobe)のフォーマットを比較し、結果をログとジョブへ記録する。
+    /// </summary>
+    private void CompareAndLogFormats(DownloadJob job)
+    {
+        var jobLabel = YtDlpFailureFormatter.BuildJobLabel(job);
+        var requestedFormat = YtDlpArgumentBuilder.NormalizeFormat(job.Format);
+        var isAudioOnly = YtDlpArgumentBuilder.IsAudioFormat(requestedFormat);
+
+        // 情報が一切取れていない場合はスキップ
+        if (string.IsNullOrEmpty(job.SourceExt) && string.IsNullOrEmpty(job.ActualExt))
+        {
+            _logger.Info($"フォーマット確認 {jobLabel} / 情報取得不可（スキップ）");
+            return;
+        }
+
+        var srcV = NormalizeCodec(job.SourceVcodec);
+        var srcA = NormalizeCodec(job.SourceAcodec);
+        var actV = NormalizeCodec(job.ActualVcodec);
+        var actA = NormalizeCodec(job.ActualAcodec);
+
+        // mp3/wav は再エンコードが前提のため、音声codec・コンテナの不一致は正常とみなす
+        bool isExpectedConversion = isAudioOnly && (requestedFormat == "mp3" || requestedFormat == "wav");
+
+        // コンテナ比較（出力コンテナ拡張子 ≠ 実ファイル拡張子）。参考情報程度。
+        bool containerMismatch = !string.IsNullOrEmpty(job.SourceExt)
+            && !string.IsNullOrEmpty(job.ActualExt)
+            && !job.SourceExt.Equals(job.ActualExt, StringComparison.OrdinalIgnoreCase);
+
+        // 動画コーデック比較（音声のみの場合は対象外）
+        bool videoMismatch = !isAudioOnly
+            && srcV != "none" && actV != "none"
+            && srcV != actV;
+
+        // 音声コーデック比較（mp3/wav再エンコードは対象外）
+        bool audioMismatch = !isExpectedConversion
+            && srcA != "none" && actA != "none"
+            && srcA != actA;
+
+        bool isMismatch = (containerMismatch && !isExpectedConversion) || videoMismatch || audioMismatch;
+        job.HasFormatMismatch = isMismatch;
+
+        var sourceDesc = BuildFormatDescription(job.SourceExt, srcV, srcA);
+        var actualDesc = BuildFormatDescription(job.ActualExt, actV, actA);
+
+        if (isMismatch)
+        {
+            var reasons = new List<string>();
+            if (containerMismatch && !isExpectedConversion)
+            {
+                reasons.Add($"コンテナ不一致({job.SourceExt}→{job.ActualExt})");
+            }
+            if (videoMismatch)
+            {
+                reasons.Add($"動画codec不一致({srcV}→{actV})");
+            }
+            if (audioMismatch)
+            {
+                reasons.Add($"音声codec不一致({srcA}→{actA})");
+            }
+
+            var reason = string.Join(", ", reasons);
+            _logger.Warn($"フォーマット不一致 {jobLabel} / ソース={sourceDesc} → ダウンロード={actualDesc} / {reason}");
+
+            job.FormatMismatchTooltip =
+                "フォーマットが一致しません\n" +
+                $"ソース: {sourceDesc}\n" +
+                $"ダウンロード: {actualDesc}\n" +
+                $"差異: {reason}";
+        }
+        else
+        {
+            _logger.Info($"フォーマット一致 {jobLabel} / ソース={sourceDesc} → ダウンロード={actualDesc}");
+
+            // 音声変換があった場合は警告ではなく情報としてツールチップに出す
+            if (isExpectedConversion && containerMismatch)
+            {
+                job.FormatMismatchTooltip = $"音声変換: {sourceDesc} → {actualDesc}";
+            }
+        }
+    }
+
+    private static string BuildFormatDescription(string? ext, string normalizedVcodec, string normalizedAcodec)
+    {
+        var desc = ext ?? "?";
+        if (normalizedVcodec != "none")
+        {
+            desc += $"/{normalizedVcodec}";
+        }
+        if (normalizedAcodec != "none")
+        {
+            desc += $"/{normalizedAcodec}";
+        }
+        return desc;
     }
 }

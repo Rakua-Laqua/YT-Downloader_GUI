@@ -72,4 +72,28 @@ public class DownloadJob
 
     /// <summary>ダウンロード完了時刻</summary>
     public DateTime? CompletedAt { get; set; }
+
+    /// <summary>yt-dlpが選択したソースの出力コンテナ拡張子（mp4, webm など）</summary>
+    public string? SourceExt { get; set; }
+
+    /// <summary>yt-dlpが選択したソースの動画コーデック（avc1, av01, vp9, none など）</summary>
+    public string? SourceVcodec { get; set; }
+
+    /// <summary>yt-dlpが選択したソースの音声コーデック（mp4a.40.2, opus, none など）</summary>
+    public string? SourceAcodec { get; set; }
+
+    /// <summary>ダウンロードファイルの実際のコンテナ拡張子</summary>
+    public string? ActualExt { get; set; }
+
+    /// <summary>ダウンロードファイルの実際の動画コーデック（ffprobe由来）</summary>
+    public string? ActualVcodec { get; set; }
+
+    /// <summary>ダウンロードファイルの実際の音声コーデック（ffprobe由来）</summary>
+    public string? ActualAcodec { get; set; }
+
+    /// <summary>フォーマット不一致があるか</summary>
+    public bool HasFormatMismatch { get; set; }
+
+    /// <summary>フォーマット検証の結果ツールチップ（不一致警告／音声変換情報）</summary>
+    public string? FormatMismatchTooltip { get; set; }
 }

@@ -42,7 +42,8 @@ internal static class YtDlpArgumentBuilder
         string requestedFormat,
         string? ffmpegPath,
         string? conversionProgressFile = null,
-        string? downloadInfoFile = null)
+        string? downloadInfoFile = null,
+        string? sourceFormatFile = null)
     {
         var args = new List<string>();
 
@@ -120,6 +121,19 @@ internal static class YtDlpArgumentBuilder
             args.Add("--print-to-file");
             args.Add("after_move:%(filepath)s|%(timestamp)s|%(upload_date)s");
             args.Add(downloadInfoFile);
+        }
+
+        // yt-dlpが実際に選択したソースストリームの情報を一時ファイルへ書き出す。
+        // video: フェーズはフォーマット選択完了後・ダウンロード前に発火する。
+        // %(vcodec)s / %(acodec)s はYouTube側が公開しているソースストリームのコーデックを返すため、
+        // ダウンロード後の実ファイル(ffprobe)と突き合わせて整合性を検証できる。
+        // 備考: %(ext)s は「出力コンテナ」(マージ後の拡張子)を返すため、必ずしもソースコンテナではない。
+        //       コンテナ比較は参考情報程度に扱う。
+        if (!string.IsNullOrEmpty(sourceFormatFile))
+        {
+            args.Add("--print-to-file");
+            args.Add("video:%(ext)s|%(vcodec)s|%(acodec)s");
+            args.Add(sourceFormatFile);
         }
 
         // サムネイルを埋め込む（音声ファイルの場合はアートワークとして）

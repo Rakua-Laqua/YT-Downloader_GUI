@@ -298,9 +298,16 @@
                                                                   CommandParameter="{Binding}"/>
                                                 </TextBlock.InputBindings>
                                             </TextBlock>
-                                            <TextBlock Text="{Binding StatusText}" Foreground="Gray" FontSize="12"
-                                                       TextWrapping="Wrap"
-                                                       ToolTip="{Binding StatusText}"/>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding StatusText}" Foreground="Gray" FontSize="12"
+                                                           TextWrapping="Wrap"
+                                                           ToolTip="{Binding StatusText}"/>
+                                                <!-- フォーマット不一致警告。ホバーで差異の詳細を表示する -->
+                                                <TextBlock Text="⚠" FontSize="14" Foreground="#F9A825" Margin="4,0,0,0"
+                                                           VerticalAlignment="Center" Cursor="Help"
+                                                           Visibility="{Binding HasFormatMismatch, Converter={StaticResource BoolToVis}}"
+                                                           ToolTip="{Binding FormatMismatchTooltip}"/>
+                                            </StackPanel>
                                         </StackPanel>
 
                                         <!-- 進捗 (変換などの後処理中は不確定アニメで「処理中」を示す) -->
