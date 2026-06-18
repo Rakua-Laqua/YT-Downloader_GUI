@@ -50,7 +50,7 @@ internal static class YtDlpArgumentBuilder
         // 出力テンプレート
         args.Add("-o");
         args.Add(outputPath);
-        args.Add("--force-overwrites");
+        args.Add("--no-overwrites");
         args.AddRange(BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage));
 
         // フォーマット指定
@@ -138,10 +138,7 @@ internal static class YtDlpArgumentBuilder
             }
         }
 
-        // YouTube対策: User-Agent は指定するが、player_client=web の強制は
-        // SABR でURLが欠落し「Requested format is not available」になり得るため行わない。
-        args.Add("--user-agent");
-        args.Add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        // User-Agent は yt-dlp 側の既定値に任せ、更新に追従する。
 
         // 分割配信(DASH/HLS)のフラグメントを並列ダウンロードして取得を高速化する。
         // mp3/wav は再エンコードが避けられないぶん、ダウンロード時間を詰めて総時間を短縮する。

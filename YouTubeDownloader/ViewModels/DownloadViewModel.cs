@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.IO;
@@ -22,6 +23,31 @@ public partial class DownloadViewModel : ViewModelBase
     private readonly IYtDlpClient _ytDlpClient;
     private readonly IDownloadManager _downloadManager;
     private readonly ISettingsRepository _settingsRepository;
+    private static readonly HashSet<string> ReservedFolderNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9"
+    };
     private string _defaultVideoFormat = "mp4";
     private string _defaultAudioFormat = "mp3";
     private string _defaultVideoQuality = "best";
@@ -493,12 +519,20 @@ public partial class DownloadViewModel : ViewModelBase
 
     private static string SanitizeFolderName(string name)
     {
-        var invalid = Path.GetInvalidPathChars().Concat(Path.GetInvalidFileNameChars()).Distinct();
+        var invalid = Path.GetInvalidPathChars().Concat(Path.GetInvalidFileNameChars()).Distinct().ToArray();
         foreach (var c in invalid)
         {
             name = name.Replace(c, '_');
         }
-        return name;
+
+        name = name.Trim().TrimEnd('.', ' ');
+        if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
+        {
+            return "playlist";
+        }
+
+        var baseName = name.Split('.')[0];
+        return ReservedFolderNames.Contains(baseName) ? "_" + name : name;
     }
 
     private static string NormalizeSelection(string? value, string[] candidates, string fallback)

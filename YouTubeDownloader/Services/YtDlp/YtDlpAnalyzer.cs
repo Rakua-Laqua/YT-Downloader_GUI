@@ -29,7 +29,7 @@ internal sealed class YtDlpAnalyzer
             var metadataLanguageArgs = YtDlpArgumentBuilder.BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage);
 
             // URLの種類を判定してから適切な方法で解析
-            bool isPlaylistUrl = url.Contains("list=") || url.Contains("/playlist");
+            bool isPlaylistUrl = IsPlaylistUrl(url);
 
             if (isPlaylistUrl)
             {
@@ -110,5 +110,31 @@ internal sealed class YtDlpAnalyzer
                 ErrorMessage = ex.Message
             };
         }
+    }
+
+    private static bool IsPlaylistUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (uri.AbsolutePath.Contains("/playlist", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var query = uri.Query.TrimStart('?');
+        foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separatorIndex = part.IndexOf('=');
+            var key = separatorIndex >= 0 ? part[..separatorIndex] : part;
+            if (Uri.UnescapeDataString(key).Equals("list", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

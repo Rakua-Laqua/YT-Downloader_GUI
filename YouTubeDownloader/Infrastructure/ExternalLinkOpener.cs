@@ -11,14 +11,14 @@ internal static class ExternalLinkOpener
 {
     public static void ConfirmAndOpenVideoLink(string? url, string? title)
     {
-        if (string.IsNullOrWhiteSpace(url))
+        if (!TryCreateBrowserUri(url, out var uri))
         {
-            MessageBox.Show("動画URLがありません。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("開けるURLは http または https のみです。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         var result = MessageBox.Show(
-            $"YouTubeを既定ブラウザで開きますか？\n\n{title}\n{url}",
+            $"YouTubeを既定ブラウザで開きますか？\n\n{title}\n{uri.AbsoluteUri}",
             "確認",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
@@ -32,7 +32,7 @@ internal static class ExternalLinkOpener
         {
             Process.Start(new ProcessStartInfo
             {
-                FileName = url,
+                FileName = uri.AbsoluteUri,
                 UseShellExecute = true
             });
         }
@@ -40,5 +40,19 @@ internal static class ExternalLinkOpener
         {
             MessageBox.Show($"ブラウザを開けませんでした: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private static bool TryCreateBrowserUri(string? url, out Uri uri)
+    {
+        uri = null!;
+        if (string.IsNullOrWhiteSpace(url)
+            || !Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+            || (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
+        {
+            return false;
+        }
+
+        uri = parsed;
+        return true;
     }
 }
