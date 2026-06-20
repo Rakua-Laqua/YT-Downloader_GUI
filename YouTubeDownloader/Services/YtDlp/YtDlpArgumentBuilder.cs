@@ -9,9 +9,19 @@ namespace YouTubeDownloader.Services;
 internal static class YtDlpArgumentBuilder
 {
     /// <summary>
-    /// UNPLAYABLE/403などでデフォルトのclientが失敗した場合に再試行で使うplayer client群。
+    /// 初回ダウンロードから使うplayer client群。安定して動く tv を先頭に置く。
+    /// player_client未指定（yt-dlp既定）だと web_safari が SABR streaming 強制でURLが欠落し
+    /// 使えるフォーマットが激減（issue #12482）、android_vr も状況次第で LOGIN_REQUIRED に
+    /// なりやすく、これが「初回失敗→フォールバックで成功」という無駄なリトライの主因になる。
+    /// tv は PO Token 不要・SABRの影響なしで 4K まで avc1/av01/m4a を網羅する。
     /// </summary>
-    public const string FallbackPlayerClients = "tv,web_safari,android";
+    public const string PrimaryPlayerClients = "tv,web_safari,android";
+
+    /// <summary>
+    /// 初回が（回復可能な理由で）失敗したときに、別経路として広く試すplayer client群。
+    /// yt-dlp既定の組み合わせに tv_embedded / ios / mweb を加え、初回と違うclientを当てる。
+    /// </summary>
+    public const string FallbackPlayerClients = "default,tv_embedded,ios,mweb";
 
     public static List<string> BuildMetadataLanguageArguments(string? language, string? playerClient = null)
     {
@@ -30,6 +40,19 @@ internal static class YtDlpArgumentBuilder
         return extractorArgs.Count == 0
             ? new List<string>()
             : new List<string> { "--extractor-args", $"youtube:{string.Join(';', extractorArgs)}" };
+    }
+
+    /// <summary>
+    /// cookies.txt が設定され実在する場合に --cookies 引数を返す。
+    /// 未設定／ファイルが存在しない場合は空（cookieなしで実行する）。
+    /// 存在しないパスを yt-dlp に渡すと実行全体が失敗するため、存在チェックして無効時は付けない。
+    /// </summary>
+    public static List<string> BuildCookieArguments(AppSettings settings)
+    {
+        var path = settings.CookieFilePath?.Trim();
+        return !string.IsNullOrEmpty(path) && File.Exists(path)
+            ? new List<string> { "--cookies", path }
+            : new List<string>();
     }
 
     /// <summary>
@@ -52,7 +75,10 @@ internal static class YtDlpArgumentBuilder
         args.Add("-o");
         args.Add(outputPath);
         args.Add("--no-overwrites");
-        args.AddRange(BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage));
+        // 初回から安定clientを明示する（既定clientは web_safari の SABR 等で初回失敗しやすいため）
+        args.AddRange(BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, PrimaryPlayerClients));
+        // 認証cookie（任意）。bot検知・年齢制限などログインが必要な動画の取得に使う。
+        args.AddRange(BuildCookieArguments(settings));
 
         // フォーマット指定
         if (IsAudioFormat(requestedFormat))

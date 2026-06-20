@@ -264,7 +264,9 @@
                         Padding="10,5"/>
                 </StackPanel>
 
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Grid.Row="1" MaxHeight="420"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
                     <ItemsControl ItemsSource="{Binding DownloadQueue}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>

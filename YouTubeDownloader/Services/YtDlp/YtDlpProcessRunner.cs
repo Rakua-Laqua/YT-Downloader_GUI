@@ -32,7 +32,9 @@ internal static class YtDlpProcessRunner
         IEnumerable<string> arguments,
         CancellationToken cancellationToken)
     {
-        var psi = CreateStartInfo(ytDlpPath, arguments);
+        // cookieは元ファイルを汚さないよう一時コピーに差し替えて渡す（using でプロセス終了後に破棄）
+        using var cookieScope = YtDlpCookieProtector.Begin(arguments);
+        var psi = CreateStartInfo(ytDlpPath, cookieScope.Arguments);
 
         using var process = new Process { StartInfo = psi };
         process.Start();

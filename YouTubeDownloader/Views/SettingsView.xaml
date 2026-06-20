@@ -167,6 +167,31 @@
                 </StackPanel>
             </Border>
 
+            <!-- 認証 (cookie) 設定 -->
+            <TextBlock Text="認証 (cookie)" FontSize="18" FontWeight="SemiBold" Margin="0,10,0,15"/>
+
+            <Border Background="#F5F5F5" Padding="20" CornerRadius="8" Margin="0,0,0,20">
+                <StackPanel>
+                    <TextBlock Text="cookies.txt のパス（任意）" FontWeight="SemiBold"/>
+                    <TextBlock Text="ログインが必要な動画（bot検知・年齢制限・メンバー限定など）を取得する場合に指定します。"
+                               Foreground="#666" FontSize="12" Margin="0,5,0,5" TextWrapping="Wrap"/>
+                    <Grid Margin="0,3,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding CookieFilePath, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="10,8"/>
+                        <Button Grid.Column="1" Content="参照..."
+                                Command="{Binding BrowseCookieFilePathCommand}"
+                                Padding="15,8" Margin="10,0,0,0"/>
+                    </Grid>
+                    <TextBlock Text="{Binding CookieFileStatus}" Foreground="#666" FontSize="12" Margin="0,5,0,0"/>
+                    <TextBlock Foreground="Gray" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Text="ブラウザ拡張「Get cookies.txt LOCALLY」等で、YouTubeにログインした状態からNetscape形式に書き出したファイルを指定してください。cookieはアカウント権限を含むため、第三者と共有したりGitにコミットしたりしないでください。"/>
+                </StackPanel>
+            </Border>
+
             <!-- ダウンロード設定 -->
             <TextBlock Text="ダウンロード設定" FontSize="18" FontWeight="SemiBold" Margin="0,10,0,15"/>
 

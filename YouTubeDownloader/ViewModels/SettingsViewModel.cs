@@ -34,6 +34,14 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private string _ffmpegPath = string.Empty;
 
+    /// <summary>YouTube認証用 cookies.txt のパス（任意）</summary>
+    [ObservableProperty]
+    private string _cookieFilePath = string.Empty;
+
+    /// <summary>cookieファイルの状態表示（未設定／読み込める／見つからない）</summary>
+    [ObservableProperty]
+    private string _cookieFileStatus = "未設定（任意）";
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(UpdateYtDlpCommand))]
     private bool _autoUpdateYtDlp = true;
@@ -164,6 +172,23 @@ public partial class SettingsViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private void BrowseCookieFilePath()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "cookies.txt を選択",
+            Filter = "cookieファイル (*.txt)|*.txt|すべてのファイル (*.*)|*.*",
+            FileName = "cookies.txt"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            CookieFilePath = dialog.FileName;
+            ValidatePaths();
+        }
+    }
+
+    [RelayCommand]
     private void BrowseDefaultSaveFolder()
     {
         var dialog = new OpenFolderDialog
@@ -183,6 +208,7 @@ public partial class SettingsViewModel : ViewModelBase
     {
         _settings.YtDlpPath = YtDlpPath;
         _settings.FfmpegPath = FfmpegPath;
+        _settings.CookieFilePath = CookieFilePath?.Trim() ?? string.Empty;
         _settings.AutoUpdateYtDlp = AutoUpdateYtDlp;
         _settings.YtDlpUpdateChannel = NormalizeSelection(YtDlpUpdateChannel, UpdateChannels, "stable");
         _settings.DefaultMetadataLanguage = string.IsNullOrWhiteSpace(DefaultMetadataLanguage)
@@ -246,6 +272,7 @@ public partial class SettingsViewModel : ViewModelBase
 
         YtDlpPath = _settings.YtDlpPath;
         FfmpegPath = _settings.FfmpegPath;
+        CookieFilePath = _settings.CookieFilePath;
         AutoUpdateYtDlp = _settings.AutoUpdateYtDlp;
         YtDlpUpdateChannel = NormalizeSelection(_settings.YtDlpUpdateChannel, UpdateChannels, "stable");
         DefaultMetadataLanguage = string.IsNullOrWhiteSpace(_settings.DefaultMetadataLanguage)
@@ -282,6 +309,7 @@ public partial class SettingsViewModel : ViewModelBase
         // 手動設定のパスが有効か確認
         IsYtDlpValid = !string.IsNullOrEmpty(YtDlpPath) && File.Exists(YtDlpPath);
         IsFfmpegValid = !string.IsNullOrEmpty(FfmpegPath) && File.Exists(FfmpegPath);
+        UpdateCookieStatus();
         
         // 自動検出されたパスを表示
         AutoDetectPaths();
@@ -334,6 +362,29 @@ public partial class SettingsViewModel : ViewModelBase
     partial void OnAutoUpdateYtDlpChanged(bool value)
     {
         YtDlpUpdateStatus = value ? "初回利用前に自動更新します。" : "自動更新は無効です。";
+    }
+
+    partial void OnCookieFilePathChanged(string value)
+    {
+        UpdateCookieStatus();
+    }
+
+    /// <summary>cookieファイルの設定状態をUI向けに更新する（任意設定なので未設定は警告扱いにしない）</summary>
+    private void UpdateCookieStatus()
+    {
+        var path = CookieFilePath?.Trim();
+        if (string.IsNullOrEmpty(path))
+        {
+            CookieFileStatus = "未設定（任意）";
+        }
+        else if (File.Exists(path))
+        {
+            CookieFileStatus = "✓ 読み込めます";
+        }
+        else
+        {
+            CookieFileStatus = "⚠ ファイルが見つかりません";
+        }
     }
 
     private void UpdateFilenamePreview()

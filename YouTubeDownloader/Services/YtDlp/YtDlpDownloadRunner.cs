@@ -23,7 +23,9 @@ internal static class YtDlpDownloadRunner
         int durationSeconds,
         CancellationToken cancellationToken)
     {
-        var psi = YtDlpProcessRunner.CreateStartInfo(ytDlpPath, arguments);
+        // cookieは元ファイルを汚さないよう一時コピーに差し替えて渡す（using でプロセス終了後に破棄）
+        using var cookieScope = YtDlpCookieProtector.Begin(arguments);
+        var psi = YtDlpProcessRunner.CreateStartInfo(ytDlpPath, cookieScope.Arguments);
 
         // 失敗時に「どのタイミングで落ちたか」を記録するため、実行時間を計測する
         var stopwatch = Stopwatch.StartNew();
