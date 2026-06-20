@@ -118,10 +118,22 @@ internal sealed class YtDlpDownloader
             if (firstRun.ExitCode != 0)
             {
                 firstRunFailed = true;
+
+                // bot検知・年齢制限・非公開・メンバー限定・429・地域制限・著作権・URL不正など、別clientで
+                // 再試行しても回復しない既知エラーは即座に失敗として扱う。特に bot/429 は無駄な再アクセスが
+                // IP制限（bot判定）を悪化させるため、再試行しないことが取得成功率の維持にもつながる。
+                if (!YtDlpFailureFormatter.ShouldRetryWithFallbackClient(firstRun))
+                {
+                    var ytDlpVersionNoRetry = await GetYtDlpVersionForLogAsync(ytDlpPath);
+                    var singleDetail = YtDlpFailureFormatter.BuildDownloadFailureDetail(job, ytDlpVersionNoRetry, arguments, firstRun);
+                    job.FailureDetail = singleDetail;
+                    _logger.Error($"ダウンロード失敗（別clientでも回復不能と判断し再試行せず） {jobLabel}{Environment.NewLine}{singleDetail}");
+                    throw new Exception($"ダウンロードに失敗しました:\n{YtDlpFailureFormatter.DescribeError(firstRun)}");
+                }
+
                 _logger.Warn($"yt-dlp 初回失敗 {jobLabel} / 終了コード={firstRun.ExitCode} 失敗フェーズ={firstRun.LastPhase} 経過={firstRun.Elapsed.TotalSeconds:F1}秒。フォールバックclientで再試行します。");
 
-                // 403 や UNPLAYABLE（「この動画は…」）はデフォルトclientの問題であることが多い。
-                // 別のplayer client群（tv等）で1回だけ再試行する。
+                // 初回(tv等)が回復可能な理由で失敗した場合は、別のplayer client群で1回だけ再試行する。
                 var retryArguments = YtDlpArgumentBuilder.BuildFallbackClientArguments(arguments, settings);
 
                 _logger.Info($"yt-dlp 再試行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(retryArguments)}");
@@ -130,9 +142,6 @@ internal sealed class YtDlpDownloader
 
                 if (retryRun.ExitCode != 0)
                 {
-                    var firstReason = YtDlpFailureFormatter.ExtractMeaningfulError(firstRun);
-                    var retryReason = YtDlpFailureFormatter.ExtractMeaningfulError(retryRun);
-
                     // 失敗の「どのタイミングで・なぜ」が後から追えるよう、両試行の終了コード・失敗フェーズ・
                     // 経過時間・実行コマンド・stderr全文・yt-dlpバージョンをまとめて記録する。
                     var ytDlpVersion = await GetYtDlpVersionForLogAsync(ytDlpPath);
@@ -140,7 +149,8 @@ internal sealed class YtDlpDownloader
                     job.FailureDetail = detail;
                     _logger.Error($"ダウンロード失敗 {jobLabel}{Environment.NewLine}{detail}");
 
-                    var combinedReason = $"【初回試行のエラー】:\n{firstReason}\n\n【再試行（フォールバック）のエラー】:\n{retryReason}";
+                    // 既知のエラーパターンは正確な原因・対処に翻訳して利用者に提示する
+                    var combinedReason = YtDlpFailureFormatter.BuildUserFacingDownloadReason(firstRun, retryRun);
                     throw new Exception($"ダウンロードに失敗しました:\n{combinedReason}");
                 }
 

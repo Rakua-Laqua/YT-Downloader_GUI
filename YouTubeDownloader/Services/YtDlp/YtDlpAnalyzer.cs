@@ -47,8 +47,11 @@ internal sealed class YtDlpAnalyzer
                 }
             }
 
-            // 単一動画として解析
-            var videoArgs = new List<string>(metadataLanguageArgs)
+            // 単一動画として解析（初回から tv 等の安定clientを使い、既定clientの初回失敗を避ける）
+            var primaryClientArgs = YtDlpArgumentBuilder.BuildMetadataLanguageArguments(
+                settings.DefaultMetadataLanguage,
+                YtDlpArgumentBuilder.PrimaryPlayerClients);
+            var videoArgs = new List<string>(primaryClientArgs)
             {
                 "--dump-json",
                 "--no-playlist",
@@ -58,8 +61,10 @@ internal sealed class YtDlpAnalyzer
                 ytDlpPath, videoArgs, cancellationToken);
             var video = !string.IsNullOrEmpty(videoResult) ? YtDlpMetadataParser.ParseVideoMetadata(videoResult, url) : null;
 
-            // 失敗時はplayer clientを変えて再試行（UNPLAYABLE/403などはこれで取得できることがある）
-            if (video == null)
+            // 失敗時はplayer clientを変えて再試行（UNPLAYABLE/403などはこれで取得できることがある）。
+            // ただし bot検知・年齢制限・非公開・429 など回復不能なエラーは、別clientでも直らず、
+            // 無駄な再アクセスがIP制限（bot判定）を悪化させるため再試行しない。
+            if (video == null && YtDlpErrorClassifier.IsRetryWorthwhile(videoError))
             {
                 var fallbackArgs = YtDlpArgumentBuilder.BuildMetadataLanguageArguments(
                     settings.DefaultMetadataLanguage,
@@ -94,8 +99,8 @@ internal sealed class YtDlpAnalyzer
                 };
             }
 
-            // 実際のyt-dlpのエラー理由を添えて返す（文字化けはStdErrEncodingで解消済み）
-            var reason = YtDlpFailureFormatter.ExtractMeaningfulError(videoError);
+            // 実際のyt-dlpのエラー理由を、既知パターンは正確な原因・対処に翻訳して添える（文字化けはStdErrEncodingで解消済み）
+            var reason = YtDlpFailureFormatter.DescribeError(videoError);
             return new YtDlpAnalyzeResult
             {
                 IsSuccess = false,
