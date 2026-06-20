@@ -43,6 +43,19 @@ internal static class YtDlpArgumentBuilder
     }
 
     /// <summary>
+    /// cookies.txt が設定され実在する場合に --cookies 引数を返す。
+    /// 未設定／ファイルが存在しない場合は空（cookieなしで実行する）。
+    /// 存在しないパスを yt-dlp に渡すと実行全体が失敗するため、存在チェックして無効時は付けない。
+    /// </summary>
+    public static List<string> BuildCookieArguments(AppSettings settings)
+    {
+        var path = settings.CookieFilePath?.Trim();
+        return !string.IsNullOrEmpty(path) && File.Exists(path)
+            ? new List<string> { "--cookies", path }
+            : new List<string>();
+    }
+
+    /// <summary>
     /// ダウンロード用のyt-dlpコマンドライン引数を構築する
     /// </summary>
     public static List<string> BuildDownloadArguments(
@@ -64,6 +77,8 @@ internal static class YtDlpArgumentBuilder
         args.Add("--no-overwrites");
         // 初回から安定clientを明示する（既定clientは web_safari の SABR 等で初回失敗しやすいため）
         args.AddRange(BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage, PrimaryPlayerClients));
+        // 認証cookie（任意）。bot検知・年齢制限などログインが必要な動画の取得に使う。
+        args.AddRange(BuildCookieArguments(settings));
 
         // フォーマット指定
         if (IsAudioFormat(requestedFormat))

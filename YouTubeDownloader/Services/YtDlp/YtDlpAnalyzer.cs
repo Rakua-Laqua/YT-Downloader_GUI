@@ -27,6 +27,8 @@ internal sealed class YtDlpAnalyzer
             await _updater.EnsureYtDlpUpdatedAsync(ytDlpPath, cancellationToken);
             var settings = _settingsRepository.Load();
             var metadataLanguageArgs = YtDlpArgumentBuilder.BuildMetadataLanguageArguments(settings.DefaultMetadataLanguage);
+            // 認証cookie（任意）。解析でもログインが必要な動画を扱えるよう全試行に付与する。
+            var cookieArgs = YtDlpArgumentBuilder.BuildCookieArguments(settings);
 
             // URLの種類を判定してから適切な方法で解析
             bool isPlaylistUrl = IsPlaylistUrl(url);
@@ -34,12 +36,9 @@ internal sealed class YtDlpAnalyzer
             if (isPlaylistUrl)
             {
                 // プレイリストURL: --flat-playlistで高速に一覧取得
-                var playlistArgs = new List<string>(metadataLanguageArgs)
-                {
-                    "--dump-single-json",
-                    "--flat-playlist",
-                    url
-                };
+                var playlistArgs = new List<string>(metadataLanguageArgs);
+                playlistArgs.AddRange(cookieArgs);
+                playlistArgs.AddRange(new[] { "--dump-single-json", "--flat-playlist", url });
                 var playlistInfoResult = await YtDlpProcessRunner.RunAsync(ytDlpPath, playlistArgs, cancellationToken);
                 if (!string.IsNullOrEmpty(playlistInfoResult))
                 {
@@ -51,12 +50,9 @@ internal sealed class YtDlpAnalyzer
             var primaryClientArgs = YtDlpArgumentBuilder.BuildMetadataLanguageArguments(
                 settings.DefaultMetadataLanguage,
                 YtDlpArgumentBuilder.PrimaryPlayerClients);
-            var videoArgs = new List<string>(primaryClientArgs)
-            {
-                "--dump-json",
-                "--no-playlist",
-                url
-            };
+            var videoArgs = new List<string>(primaryClientArgs);
+            videoArgs.AddRange(cookieArgs);
+            videoArgs.AddRange(new[] { "--dump-json", "--no-playlist", url });
             var (videoResult, videoError, _) = await YtDlpProcessRunner.RunRawAsync(
                 ytDlpPath, videoArgs, cancellationToken);
             var video = !string.IsNullOrEmpty(videoResult) ? YtDlpMetadataParser.ParseVideoMetadata(videoResult, url) : null;
@@ -69,12 +65,9 @@ internal sealed class YtDlpAnalyzer
                 var fallbackArgs = YtDlpArgumentBuilder.BuildMetadataLanguageArguments(
                     settings.DefaultMetadataLanguage,
                     YtDlpArgumentBuilder.FallbackPlayerClients);
-                var retryArgs = new List<string>(fallbackArgs)
-                {
-                    "--dump-json",
-                    "--no-playlist",
-                    url
-                };
+                var retryArgs = new List<string>(fallbackArgs);
+                retryArgs.AddRange(cookieArgs);
+                retryArgs.AddRange(new[] { "--dump-json", "--no-playlist", url });
                 var (retryResult, retryError, _) = await YtDlpProcessRunner.RunRawAsync(
                     ytDlpPath, retryArgs, cancellationToken);
                 if (!string.IsNullOrEmpty(retryResult))

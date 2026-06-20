@@ -14,6 +14,13 @@ public class AppSettings
     /// <summary>ffmpeg実行ファイルパス</summary>
     public string FfmpegPath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// YouTube認証用 cookies.txt のパス（任意）。指定すると yt-dlp に --cookies で渡し、
+    /// bot検知・年齢制限・メンバー限定などログインが必要な動画を取得できるようにする。
+    /// ブラウザ拡張「Get cookies.txt LOCALLY」等でNetscape形式に書き出したファイルを想定。
+    /// </summary>
+    public string CookieFilePath { get; set; } = string.Empty;
+
     /// <summary>yt-dlpを初回利用前に自動更新するか</summary>
     public bool AutoUpdateYtDlp { get; set; } = true;
 
