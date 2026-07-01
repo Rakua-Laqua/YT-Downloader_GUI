@@ -112,7 +112,7 @@ internal sealed class YtDlpDownloader
         try
         {
             _logger.Info($"yt-dlp 実行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(arguments)}");
-            var firstRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, arguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
+            var firstRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, arguments, progress, conversionProgressFile, durationSeconds, cancellationToken, _logger);
             LogRunSummary(jobLabel, "yt-dlp 初回出力要約", firstRun);
 
             if (firstRun.ExitCode != 0)
@@ -137,7 +137,7 @@ internal sealed class YtDlpDownloader
                 var retryArguments = YtDlpArgumentBuilder.BuildFallbackClientArguments(arguments, settings);
 
                 _logger.Info($"yt-dlp 再試行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(retryArguments)}");
-                var retryRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
+                var retryRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken, _logger);
                 LogRunSummary(jobLabel, "yt-dlp 再試行出力要約", retryRun);
 
                 if (retryRun.ExitCode != 0)

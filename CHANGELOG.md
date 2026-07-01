@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v3.9.1 - 2026-07-01
+
+### 変更
+- `DownloadManager` における同時ダウンロード制限の実装を、`SemaphoreSlim` から `TaskCompletionSource` キューによる管理方式に変更し、動的上限変更時の挙動を安定化させました。
+- `YtDlpDownloadRunner` において、出力ログ（stdout/stderr）のメモリ上限を設定し、キャンセル時にプロセスツリーを確実に強制終了させるリソースリーク・ハングアップ防止ロジックを追加しました。
+- `YtDlpCookieProtector` に `ILoggingService` を渡し、一時コピー処理の状況をログ出力できるように改善しました。
+- コードベース視覚化で生成された一時ファイル（`graph-data.js`, `graph-viewer.html`）を `.gitignore` の除外対象に追加しました。
+
 ## v3.9.0 - 2026-07-01
 
 ### 追加

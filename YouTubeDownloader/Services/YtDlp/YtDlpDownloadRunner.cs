@@ -11,6 +11,10 @@ namespace YouTubeDownloader.Services;
 
 internal static class YtDlpDownloadRunner
 {
+    private const int MaxStdErrChars = 20_000;
+    private const int MaxSummaryChars = 8_000;
+    private const int MaxDiagnosticsChars = 12_000;
+
     /// <summary>
     /// yt-dlpのダウンロードプロセスを起動し、stdoutから進捗を報告しながら終了コードとstderrを返す。
     /// 初回実行と403リトライで共通。
@@ -21,10 +25,11 @@ internal static class YtDlpDownloadRunner
         IProgress<ProgressInfo>? progress,
         string? conversionProgressFile,
         int durationSeconds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ILoggingService? logger = null)
     {
         // cookieは元ファイルを汚さないよう一時コピーに差し替えて渡す（using でプロセス終了後に破棄）
-        using var cookieScope = YtDlpCookieProtector.Begin(arguments);
+        using var cookieScope = YtDlpCookieProtector.Begin(arguments, logger);
         var psi = YtDlpProcessRunner.CreateStartInfo(ytDlpPath, cookieScope.Arguments);
 
         // 失敗時に「どのタイミングで落ちたか」を記録するため、実行時間を計測する
@@ -52,7 +57,7 @@ internal static class YtDlpDownloadRunner
             string currentPhaseStatus = "動画データダウンロード中"; // デフォルト
             while (!process.StandardOutput.EndOfStream)
             {
-                var line = await process.StandardOutput.ReadLineAsync();
+                var line = await process.StandardOutput.ReadLineAsync(cancellationToken);
                 if (line == null)
                 {
                     continue;
@@ -104,27 +109,37 @@ internal static class YtDlpDownloadRunner
         {
             while (!process.StandardError.EndOfStream)
             {
-                var line = await process.StandardError.ReadLineAsync();
+                var line = await process.StandardError.ReadLineAsync(cancellationToken);
                 if (line != null)
                 {
-                    errorOutput.AppendLine(line);
+                    AppendLimitedLine(errorOutput, line, MaxStdErrChars);
                 }
             }
         });
 
-        await Task.WhenAll(outputTask, errorTask);
-
-        // 変換ポーラーを停止して終了を待つ
-        conversionPollCts.Cancel();
-        if (conversionPollTask != null)
+        try
         {
-            try
+            await Task.WhenAll(outputTask, errorTask);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            YtDlpProcessRunner.KillProcessTree(process);
+            throw;
+        }
+        finally
+        {
+            // 変換ポーラーを停止して終了を待つ
+            conversionPollCts.Cancel();
+            if (conversionPollTask != null)
             {
-                await conversionPollTask;
-            }
-            catch
-            {
-                // ポーラーの後始末で例外は無視
+                try
+                {
+                    await conversionPollTask;
+                }
+                catch
+                {
+                    // ポーラーの後始末で例外は無視
+                }
             }
         }
 
@@ -150,12 +165,12 @@ internal static class YtDlpDownloadRunner
             return;
         }
 
-        if (outputSummary.Length > 8_000 || !outputSummaryLines.Add(line))
+        if (outputSummary.Length > MaxSummaryChars || !outputSummaryLines.Add(line))
         {
             return;
         }
 
-        outputSummary.AppendLine(line);
+        AppendLimitedLine(outputSummary, line, MaxSummaryChars);
     }
 
     private static bool IsSummaryOutputLine(string line)
@@ -178,12 +193,33 @@ internal static class YtDlpDownloadRunner
         }
 
         // 同じタイムアウト行が大量に出てもログを肥大化させない。
-        if (outputDiagnostics.Length > 12_000)
+        if (outputDiagnostics.Length > MaxDiagnosticsChars)
         {
             return;
         }
 
-        outputDiagnostics.AppendLine(line);
+        AppendLimitedLine(outputDiagnostics, line, MaxDiagnosticsChars);
+    }
+
+    private static void AppendLimitedLine(StringBuilder builder, string line, int maxChars)
+    {
+        if (builder.Length >= maxChars)
+        {
+            return;
+        }
+
+        var remaining = maxChars - builder.Length;
+        if (line.Length + Environment.NewLine.Length <= remaining)
+        {
+            builder.AppendLine(line);
+            return;
+        }
+
+        if (remaining > Environment.NewLine.Length)
+        {
+            builder.Append(line, 0, remaining - Environment.NewLine.Length);
+        }
+        builder.AppendLine();
     }
 
     private static bool IsDiagnosticOutputLine(string line)

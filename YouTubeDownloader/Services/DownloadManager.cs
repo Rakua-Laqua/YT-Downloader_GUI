@@ -38,7 +38,7 @@ public class DownloadManager : IDownloadManager, IDisposable
     private readonly ILoggingService _logger;
     private readonly List<DownloadJob> _allJobs = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _cancellationTokens = new();
-    private readonly SemaphoreSlim _semaphore;
+    private readonly Queue<TaskCompletionSource> _slotWaiters = new();
     private readonly object _lock = new();
 
     /// <summary>同時ダウンロード数の許容範囲</summary>
@@ -47,6 +47,7 @@ public class DownloadManager : IDownloadManager, IDisposable
 
     /// <summary>現在有効な同時ダウンロード数（設定保存で動的に変わる）</summary>
     private int _maxConcurrency;
+    private int _runningDownloads;
     private bool _disposed;
 
     public event EventHandler<DownloadJobEventArgs>? JobProgressChanged;
@@ -60,8 +61,6 @@ public class DownloadManager : IDownloadManager, IDisposable
         _logger = logger;
 
         _maxConcurrency = ClampConcurrency(_settingsRepository.Load().MaxConcurrentDownloads);
-        // 動的に許可数を増減できるよう、上限を固定しない形で生成する
-        _semaphore = new SemaphoreSlim(_maxConcurrency);
 
         _settingsRepository.SettingsSaved += OnSettingsSaved;
     }
@@ -80,52 +79,70 @@ public class DownloadManager : IDownloadManager, IDisposable
 
     /// <summary>
     /// 同時実行数を動的に変更する。実行中のジョブは中断せず、以降のジョブ開始から新しい上限が効く。
-    /// SemaphoreSlimは生成後にサイズ変更できないため、許可数の増減で実現する：
-    /// 増やす場合は Release、減らす場合は空いた許可を吸収して新規開始を抑制する。
     /// </summary>
     private void ApplyMaxConcurrency(int newMax)
     {
-        int delta;
         lock (_lock)
         {
             if (_disposed || newMax == _maxConcurrency)
             {
                 return;
             }
-            delta = newMax - _maxConcurrency;
-            _maxConcurrency = newMax;
-        }
 
-        if (delta > 0)
-        {
-            try
-            {
-                _semaphore.Release(delta);
-            }
-            catch (ObjectDisposedException)
-            {
-                // 破棄済みなら何もしない
-            }
-        }
-        else
-        {
-            for (var i = 0; i < -delta; i++)
-            {
-                _ = AbsorbPermitAsync();
-            }
+            _maxConcurrency = newMax;
+            ReleaseQueuedSlotsIfPossibleLocked();
         }
     }
 
-    /// <summary>許可を1つ取得したまま解放しないことで、実効的な同時実行上限を1下げる</summary>
-    private async Task AbsorbPermitAsync()
+    private async Task WaitForDownloadSlotAsync(CancellationToken cancellationToken)
     {
-        try
+        TaskCompletionSource waiter;
+        lock (_lock)
         {
-            await _semaphore.WaitAsync();
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(DownloadManager));
+            }
+
+            if (_runningDownloads < _maxConcurrency)
+            {
+                _runningDownloads++;
+                return;
+            }
+
+            waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _slotWaiters.Enqueue(waiter);
         }
-        catch (ObjectDisposedException)
+
+        using var registration = cancellationToken.Register(() => waiter.TrySetCanceled(cancellationToken));
+        await waiter.Task;
+    }
+
+    private void ReleaseDownloadSlot()
+    {
+        lock (_lock)
         {
-            // 破棄済みなら何もしない
+            if (_runningDownloads > 0)
+            {
+                _runningDownloads--;
+            }
+
+            ReleaseQueuedSlotsIfPossibleLocked();
+        }
+    }
+
+    private void ReleaseQueuedSlotsIfPossibleLocked()
+    {
+        while (!_disposed && _runningDownloads < _maxConcurrency && _slotWaiters.Count > 0)
+        {
+            var waiter = _slotWaiters.Dequeue();
+            if (waiter.Task.IsCompleted)
+            {
+                continue;
+            }
+
+            _runningDownloads++;
+            waiter.TrySetResult();
         }
     }
 
@@ -167,7 +184,7 @@ public class DownloadManager : IDownloadManager, IDisposable
         var waitStopwatch = Stopwatch.StartNew();
         try
         {
-            await _semaphore.WaitAsync(cts.Token);
+            await WaitForDownloadSlotAsync(cts.Token);
             semaphoreAcquired = true;
             cts.Token.ThrowIfCancellationRequested();
             waitStopwatch.Stop();
@@ -238,14 +255,7 @@ public class DownloadManager : IDownloadManager, IDisposable
             cts.Dispose();
             if (semaphoreAcquired)
             {
-                try
-                {
-                    _semaphore.Release();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Dispose済みなら終了処理中なので何もしない
-                }
+                ReleaseDownloadSlot();
             }
         }
     }
@@ -349,8 +359,10 @@ public class DownloadManager : IDownloadManager, IDisposable
                 cts.Dispose();
             }
             _cancellationTokens.Clear();
+            while (_slotWaiters.Count > 0)
+            {
+                _slotWaiters.Dequeue().TrySetCanceled();
+            }
         }
-
-        _semaphore.Dispose();
     }
 }

@@ -18,7 +18,7 @@ internal static class YtDlpCookieProtector
     /// using で受け、Dispose（=プロセス終了後）に一時ファイルを削除する。
     /// cookie未指定・ファイル不在・コピー失敗時は元の引数のまま（後始末も不要）。
     /// </summary>
-    public static CookieCopyScope Begin(IEnumerable<string> arguments)
+    public static CookieCopyScope Begin(IEnumerable<string> arguments, ILoggingService? logger = null)
     {
         var args = new List<string>(arguments);
         var index = args.IndexOf("--cookies");
@@ -40,9 +40,10 @@ internal static class YtDlpCookieProtector
             args[index + 1] = tempPath;
             return new CookieCopyScope(args, tempPath);
         }
-        catch
+        catch (Exception ex)
         {
             // コピーに失敗しても元のパスのまま実行する（最悪でも従来挙動）
+            logger?.Warn($"cookieファイルの一時コピー作成に失敗しました。元ファイルを直接参照して実行します: {ex.GetType().Name}: {ex.Message}");
             return new CookieCopyScope(args, null);
         }
     }
