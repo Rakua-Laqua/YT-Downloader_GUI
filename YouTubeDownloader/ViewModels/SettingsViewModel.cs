@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Microsoft.Win32;
+using YouTubeDownloader.Infrastructure;
 using YouTubeDownloader.Models;
 using YouTubeDownloader.Services;
 
@@ -142,16 +142,13 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseYtDlpPath()
     {
-        var dialog = new OpenFileDialog
+        var path = DialogPicker.BrowseFile(
+            "yt-dlp実行ファイルを選択",
+            "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
+            "yt-dlp.exe");
+        if (path != null)
         {
-            Title = "yt-dlp実行ファイルを選択",
-            Filter = "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
-            FileName = "yt-dlp.exe"
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            YtDlpPath = dialog.FileName;
+            YtDlpPath = path;
             ValidatePaths();
         }
     }
@@ -159,16 +156,13 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseFfmpegPath()
     {
-        var dialog = new OpenFileDialog
+        var path = DialogPicker.BrowseFile(
+            "ffmpeg実行ファイルを選択",
+            "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
+            "ffmpeg.exe");
+        if (path != null)
         {
-            Title = "ffmpeg実行ファイルを選択",
-            Filter = "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
-            FileName = "ffmpeg.exe"
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            FfmpegPath = dialog.FileName;
+            FfmpegPath = path;
             ValidatePaths();
         }
     }
@@ -176,16 +170,13 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseCookieFilePath()
     {
-        var dialog = new OpenFileDialog
+        var path = DialogPicker.BrowseFile(
+            "cookies.txt を選択",
+            "cookieファイル (*.txt)|*.txt|すべてのファイル (*.*)|*.*",
+            "cookies.txt");
+        if (path != null)
         {
-            Title = "cookies.txt を選択",
-            Filter = "cookieファイル (*.txt)|*.txt|すべてのファイル (*.*)|*.*",
-            FileName = "cookies.txt"
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            CookieFilePath = dialog.FileName;
+            CookieFilePath = path;
             ValidatePaths();
         }
     }
@@ -193,15 +184,10 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseDefaultSaveFolder()
     {
-        var dialog = new OpenFolderDialog
+        var path = DialogPicker.BrowseFolder("デフォルト保存先フォルダを選択", DefaultSaveFolder);
+        if (path != null)
         {
-            Title = "デフォルト保存先フォルダを選択",
-            InitialDirectory = DefaultSaveFolder
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            DefaultSaveFolder = dialog.FolderName;
+            DefaultSaveFolder = path;
         }
     }
 

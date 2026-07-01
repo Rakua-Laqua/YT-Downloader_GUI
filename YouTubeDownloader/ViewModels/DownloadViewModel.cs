@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Microsoft.Win32;
 using YouTubeDownloader.Infrastructure;
 using YouTubeDownloader.Models;
 using YouTubeDownloader.Services;
@@ -276,15 +275,10 @@ public partial class DownloadViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseSaveFolder()
     {
-        var dialog = new OpenFolderDialog
+        var path = DialogPicker.BrowseFolder("保存先フォルダを選択", SaveFolderPath);
+        if (path != null)
         {
-            Title = "保存先フォルダを選択",
-            InitialDirectory = SaveFolderPath
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            SaveFolderPath = dialog.FolderName;
+            SaveFolderPath = path;
         }
     }
 

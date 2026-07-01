@@ -164,7 +164,12 @@ public class DownloadManager : IDownloadManager, IDisposable
         job.Status = DownloadStatus.Pending;
         JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
 
-        _ = ProcessJobAsync(job);
+        StartJobProcessing(job);
+    }
+
+    private void StartJobProcessing(DownloadJob job)
+    {
+        _ = Task.Run(() => ProcessJobAsync(job));
     }
 
     private async Task ProcessJobAsync(DownloadJob job)
@@ -232,6 +237,17 @@ public class DownloadManager : IDownloadManager, IDisposable
             {
                 JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
             }
+        }
+        catch (YtDlpDownloadException ex)
+        {
+            _logger.Error($"ジョブ失敗(yt-dlp) [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
+            job.Status = DownloadStatus.Failed;
+            job.ErrorMessage = ex.Message;
+            if (string.IsNullOrWhiteSpace(job.FailureDetail) && !string.IsNullOrWhiteSpace(ex.FailureDetail))
+            {
+                job.FailureDetail = ex.FailureDetail;
+            }
+            JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
         }
         catch (Exception ex)
         {
@@ -321,7 +337,7 @@ public class DownloadManager : IDownloadManager, IDisposable
         if (jobToRetry != null)
         {
             JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(jobToRetry));
-            _ = ProcessJobAsync(jobToRetry);
+            StartJobProcessing(jobToRetry);
         }
     }
 

@@ -31,10 +31,7 @@ public class SettingsRepository : ISettingsRepository
     public SettingsRepository(ILoggingService? logger = null)
     {
         _logger = logger ?? new LoggingService();
-        var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var appFolder = Path.Combine(appDataPath, "YouTubeDownloader");
-        Directory.CreateDirectory(appFolder);
-        _settingsFilePath = Path.Combine(appFolder, "settings.json");
+        _settingsFilePath = AppStorage.GetAppFilePath("settings.json");
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -56,7 +53,7 @@ public class SettingsRepository : ISettingsRepository
         catch (Exception ex)
         {
             _logger.Error("設定ファイルの読み込みに失敗しました。デフォルト設定で起動します。", ex);
-            TryCopyUnreadableFile(_settingsFilePath);
+            AppStorage.TryCopyUnreadableFile(_settingsFilePath, "設定", _logger);
         }
         finally
         {
@@ -64,25 +61,6 @@ public class SettingsRepository : ISettingsRepository
         }
 
         return new AppSettings();
-    }
-
-    private void TryCopyUnreadableFile(string path)
-    {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return;
-            }
-
-            var backupPath = $"{path}.invalid-{DateTime.Now:yyyyMMddHHmmss}";
-            File.Copy(path, backupPath, overwrite: false);
-            _logger.Warn($"読み込めなかった設定ファイルを退避しました: {backupPath}");
-        }
-        catch (Exception ex)
-        {
-            _logger.Warn($"読み込めなかった設定ファイルの退避に失敗しました: {ex.GetType().Name}: {ex.Message}");
-        }
     }
 
     public async Task SaveAsync(AppSettings settings)

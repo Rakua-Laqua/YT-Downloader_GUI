@@ -34,10 +34,7 @@ public class MetadataRepository : IMetadataRepository
     public MetadataRepository(ILoggingService? logger = null)
     {
         _logger = logger ?? new LoggingService();
-        var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var appFolder = Path.Combine(appDataPath, "YouTubeDownloader");
-        Directory.CreateDirectory(appFolder);
-        _metadataFilePath = Path.Combine(appFolder, "metadata.json");
+        _metadataFilePath = AppStorage.GetAppFilePath("metadata.json");
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -61,29 +58,10 @@ public class MetadataRepository : IMetadataRepository
         catch (Exception ex)
         {
             _logger.Error("ライブラリ履歴ファイルの読み込みに失敗しました。空の履歴として扱います。", ex);
-            TryCopyUnreadableFile(_metadataFilePath);
+            AppStorage.TryCopyUnreadableFile(_metadataFilePath, "ライブラリ履歴", _logger);
             _cache = new List<VideoMetadata>();
         }
         _loaded = true;
-    }
-
-    private void TryCopyUnreadableFile(string path)
-    {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return;
-            }
-
-            var backupPath = $"{path}.invalid-{DateTime.Now:yyyyMMddHHmmss}";
-            File.Copy(path, backupPath, overwrite: false);
-            _logger.Warn($"読み込めなかったライブラリ履歴ファイルを退避しました: {backupPath}");
-        }
-        catch (Exception ex)
-        {
-            _logger.Warn($"読み込めなかったライブラリ履歴ファイルの退避に失敗しました: {ex.GetType().Name}: {ex.Message}");
-        }
     }
 
     private async Task SaveAsync()

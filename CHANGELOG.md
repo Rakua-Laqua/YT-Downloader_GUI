@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [3.9.2] - 2026-07-02
+
+### 追加
+- `YtDlpDownloadException` 例外クラスを新設し、ダウンロード処理時のエラー原因や失敗詳細（FailureDetail）をより明確に伝播できるようにしました。
+- `DialogPicker` 共通クラスを新設し、ファイルおよびフォルダの選択ダイアログ処理（OpenFileDialog, OpenFolderDialog）を集約・簡素化しました。
+- `AppStorage` 共通クラスを新設し、ローカルアプリケーションデータフォルダのパス生成や、破損した設定・ライブラリ履歴ファイルの退避処理を集約しました。
+
+### 修正
+- `DownloadManager` において、ジョブ処理をバックグラウンドタスク（`Task.Run`）で開始することで、UIスレッドの同期的なブロックを防止しました。
+- `ThumbnailImageConverter` において、画像のダウンロードやデコードが失敗した際に、メモリリークや不正な表示状態の維持を防ぐため、該当画像をキャッシュから自動的に削除するイベント処理を追加しました。
+
+### 変更
+- `YtDlpDownloader` および `YtDlpDownloadRunner` において、ダウンロードプロセスの出力解析を `DownloadOutputProcessor` インナークラスに抽出し、事前検証やフォールバック処理をメソッドへ分割することで、コードの可読性と保守性を向上させました。
+- `MetadataRepository` および `SettingsRepository` から重複していたデータ保存先パス生成およびファイル退避のロジックを削除し、`AppStorage` クラスの共通メソッドを利用するようにリファクタリングしました。
+- 設定画面 (`SettingsViewModel`) およびダウンロード画面 (`DownloadViewModel`) でダイアログを表示する箇所を、新設した `DialogPicker` を使用するように変更しました。
+
 ## v3.9.1 - 2026-07-01
 
 ### 変更

@@ -41,79 +41,35 @@ internal static class YtDlpDownloadRunner
 
         // 変換進捗ポーラーのキャンセル制御（ExtractAudio開始時に起動する）
         using var conversionPollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task? conversionPollTask = null;
-        var canTrackConversion = !string.IsNullOrEmpty(conversionProgressFile) && durationSeconds > 0;
-
-        // 失敗時に「どのフェーズで落ちたか」を残すため、最後に観測したフェーズを追跡する。
-        // 書き込みは outputTask 内のみで、読み取りは Task.WhenAll 完了後に行う（完了により可視性は保証される）。
-        var lastPhase = "(処理開始前)";
+        var outputProcessor = new DownloadOutputProcessor(progress, conversionProgressFile, durationSeconds, conversionPollCts.Token);
 
         // 出力を読み取りながら進捗を報告
-        var outputSummary = new StringBuilder();
-        var outputSummaryLines = new HashSet<string>(StringComparer.Ordinal);
-        var outputDiagnostics = new StringBuilder();
         var outputTask = Task.Run(async () =>
         {
-            string currentPhaseStatus = "動画データダウンロード中"; // デフォルト
-            while (!process.StandardOutput.EndOfStream)
+            while (true)
             {
                 var line = await process.StandardOutput.ReadLineAsync(cancellationToken);
                 if (line == null)
                 {
-                    continue;
+                    break;
                 }
 
-                AppendSummaryLine(outputSummary, outputSummaryLines, line);
-                AppendDiagnosticLine(outputDiagnostics, line);
-
-                // 現在フェーズを判定し、失敗フェーズ追跡と進捗の現在フェーズ表示を更新する
-                var detectedPhase = DetectPhaseName(line);
-                if (detectedPhase != null)
-                {
-                    lastPhase = detectedPhase;
-                    // ダウンロード(動画/音声)の判定のみ進捗メッセージへ反映する
-                    if (detectedPhase.Contains("ダウンロード"))
-                    {
-                        currentPhaseStatus = detectedPhase;
-                    }
-                }
-
-                // 音声変換(ExtractAudio)開始を検知したら、ffmpegの進捗ファイルのポーリングを開始する。
-                // ポーラーが実進捗(%)を報告するので、この行自体は不確定表示にせず実進捗に委ねる。
-                if (canTrackConversion && conversionPollTask == null &&
-                    line.Contains("[ExtractAudio] Destination:"))
-                {
-                    conversionPollTask = PollConversionProgressAsync(conversionProgressFile!, durationSeconds, progress, conversionPollCts.Token);
-                    progress?.Report(new ProgressInfo { Percentage = 0, Status = "音声変換中...", IsPostProcessing = false });
-                    continue;
-                }
-
-                if (progress != null)
-                {
-                    var progressInfo = ParseProgressLine(line);
-                    if (progressInfo != null)
-                    {
-                        // デフォルトのメッセージを現在フェーズに上書き
-                        if (progressInfo.Status == "ダウンロード中")
-                        {
-                            progressInfo.Status = currentPhaseStatus;
-                        }
-                        progress.Report(progressInfo);
-                    }
-                }
+                outputProcessor.ProcessLine(line);
             }
         });
 
         var errorOutput = new StringBuilder();
         var errorTask = Task.Run(async () =>
         {
-            while (!process.StandardError.EndOfStream)
+            while (true)
             {
                 var line = await process.StandardError.ReadLineAsync(cancellationToken);
-                if (line != null)
+                if (line == null)
                 {
-                    AppendLimitedLine(errorOutput, line, MaxStdErrChars);
+                    break;
                 }
+
+                AppendLimitedLine(errorOutput, line, MaxStdErrChars);
             }
         });
 
@@ -130,11 +86,11 @@ internal static class YtDlpDownloadRunner
         {
             // 変換ポーラーを停止して終了を待つ
             conversionPollCts.Cancel();
-            if (conversionPollTask != null)
+            if (outputProcessor.ConversionPollTask != null)
             {
                 try
                 {
-                    await conversionPollTask;
+                    await outputProcessor.ConversionPollTask;
                 }
                 catch
                 {
@@ -151,11 +107,105 @@ internal static class YtDlpDownloadRunner
         {
             ExitCode = process.ExitCode,
             StdErr = errorOutput.ToString(),
-            StdOutSummary = outputSummary.ToString(),
-            StdOutDiagnostics = outputDiagnostics.ToString(),
-            LastPhase = lastPhase,
+            StdOutSummary = outputProcessor.StdOutSummary,
+            StdOutDiagnostics = outputProcessor.StdOutDiagnostics,
+            LastPhase = outputProcessor.LastPhase,
             Elapsed = stopwatch.Elapsed
         };
+    }
+
+    private sealed class DownloadOutputProcessor
+    {
+        private readonly IProgress<ProgressInfo>? _progress;
+        private readonly string? _conversionProgressFile;
+        private readonly int _durationSeconds;
+        private readonly CancellationToken _conversionCancellationToken;
+        private readonly bool _canTrackConversion;
+        private readonly StringBuilder _outputSummary = new();
+        private readonly HashSet<string> _outputSummaryLines = new(StringComparer.Ordinal);
+        private readonly StringBuilder _outputDiagnostics = new();
+        private string _currentPhaseStatus = "動画データダウンロード中";
+
+        public DownloadOutputProcessor(
+            IProgress<ProgressInfo>? progress,
+            string? conversionProgressFile,
+            int durationSeconds,
+            CancellationToken conversionCancellationToken)
+        {
+            _progress = progress;
+            _conversionProgressFile = conversionProgressFile;
+            _durationSeconds = durationSeconds;
+            _conversionCancellationToken = conversionCancellationToken;
+            _canTrackConversion = !string.IsNullOrEmpty(conversionProgressFile) && durationSeconds > 0;
+        }
+
+        public Task? ConversionPollTask { get; private set; }
+        public string LastPhase { get; private set; } = "(処理開始前)";
+        public string StdOutSummary => _outputSummary.ToString();
+        public string StdOutDiagnostics => _outputDiagnostics.ToString();
+
+        public void ProcessLine(string line)
+        {
+            AppendSummaryLine(_outputSummary, _outputSummaryLines, line);
+            AppendDiagnosticLine(_outputDiagnostics, line);
+
+            UpdatePhase(line);
+            if (StartConversionPollingIfNeeded(line))
+            {
+                return;
+            }
+
+            ReportProgress(line);
+        }
+
+        private void UpdatePhase(string line)
+        {
+            var detectedPhase = DetectPhaseName(line);
+            if (detectedPhase == null)
+            {
+                return;
+            }
+
+            LastPhase = detectedPhase;
+            if (detectedPhase.Contains("ダウンロード"))
+            {
+                _currentPhaseStatus = detectedPhase;
+            }
+        }
+
+        private bool StartConversionPollingIfNeeded(string line)
+        {
+            if (!_canTrackConversion
+                || ConversionPollTask != null
+                || !line.Contains("[ExtractAudio] Destination:"))
+            {
+                return false;
+            }
+
+            ConversionPollTask = PollConversionProgressAsync(_conversionProgressFile!, _durationSeconds, _progress, _conversionCancellationToken);
+            _progress?.Report(new ProgressInfo { Percentage = 0, Status = "音声変換中...", IsPostProcessing = false });
+            return true;
+        }
+
+        private void ReportProgress(string line)
+        {
+            if (_progress == null)
+            {
+                return;
+            }
+
+            var progressInfo = ParseProgressLine(line);
+            if (progressInfo == null)
+            {
+                return;
+            }
+
+            if (progressInfo.Status == "ダウンロード中")
+            {
+                progressInfo.Status = _currentPhaseStatus;
+            }
+            _progress.Report(progressInfo);
+        }
     }
 
     private static void AppendSummaryLine(StringBuilder outputSummary, HashSet<string> outputSummaryLines, string line)
