@@ -18,6 +18,8 @@ public partial class SettingsViewModel : ViewModelBase
     private readonly ISettingsRepository _settingsRepository;
     private readonly IYtDlpClient _ytDlpClient;
     private AppSettings _settings = null!;
+    private string? _autoDetectedYtDlpPath;
+    private string? _autoDetectedFfmpegPath;
 
     public SettingsViewModel(ISettingsRepository settingsRepository, IYtDlpClient ytDlpClient)
     {
@@ -241,7 +243,7 @@ public partial class SettingsViewModel : ViewModelBase
         {
             var result = await _ytDlpClient.UpdateYtDlpAsync(channel);
             YtDlpUpdateStatus = result.Message;
-            ValidatePaths();
+            RefreshAutoDetectedPaths();
             await RefreshYtDlpVersionAsync();
 
             if (!result.IsSuccess)
@@ -289,7 +291,7 @@ public partial class SettingsViewModel : ViewModelBase
         FilenameTemplate = _settings.FilenameTemplate;
         MaxConcurrentDownloads = DownloadManager.ClampConcurrency(_settings.MaxConcurrentDownloads);
 
-        ValidatePaths();
+        RefreshAutoDetectedPaths();
         YtDlpUpdateStatus = AutoUpdateYtDlp ? "初回利用前に自動更新します。" : "自動更新は無効です。";
         UpdateFilenamePreview();
         _ = RefreshYtDlpVersionAsync();
@@ -307,26 +309,30 @@ public partial class SettingsViewModel : ViewModelBase
     private void ValidatePaths()
     {
         // 手動設定のパスが有効か確認
-        IsYtDlpValid = !string.IsNullOrEmpty(YtDlpPath) && File.Exists(YtDlpPath);
-        IsFfmpegValid = !string.IsNullOrEmpty(FfmpegPath) && File.Exists(FfmpegPath);
+        var hasManualYtDlp = !string.IsNullOrEmpty(YtDlpPath) && File.Exists(YtDlpPath);
+        var hasManualFfmpeg = !string.IsNullOrEmpty(FfmpegPath) && File.Exists(FfmpegPath);
+        var hasAutoYtDlp = !string.IsNullOrEmpty(_autoDetectedYtDlpPath) && File.Exists(_autoDetectedYtDlpPath);
+        var hasAutoFfmpeg = !string.IsNullOrEmpty(_autoDetectedFfmpegPath) && File.Exists(_autoDetectedFfmpegPath);
+
+        IsYtDlpValid = hasManualYtDlp || hasAutoYtDlp;
+        IsFfmpegValid = hasManualFfmpeg || hasAutoFfmpeg;
         UpdateCookieStatus();
-        
-        // 自動検出されたパスを表示
-        AutoDetectPaths();
     }
 
     [RelayCommand]
     private void AutoDetectPaths()
     {
+        RefreshAutoDetectedPaths();
+    }
+
+    private void RefreshAutoDetectedPaths()
+    {
         // yt-dlp自動検出（YtDlpClientと同じ探索順を使い、表示と実動作のずれを防ぐ）
         var ytDlpAuto = ExecutableLocator.FindExecutable("yt-dlp.exe", "yt-dlp");
+        _autoDetectedYtDlpPath = ytDlpAuto;
         if (!string.IsNullOrEmpty(ytDlpAuto))
         {
             YtDlpAutoDetected = $"自動検出: {ytDlpAuto}";
-            if (!IsYtDlpValid)
-            {
-                IsYtDlpValid = true; // 自動検出でも有効とする
-            }
         }
         else
         {
@@ -335,18 +341,17 @@ public partial class SettingsViewModel : ViewModelBase
         
         // ffmpeg自動検出
         var ffmpegAuto = ExecutableLocator.FindExecutable("ffmpeg.exe", "ffmpeg");
+        _autoDetectedFfmpegPath = ffmpegAuto;
         if (!string.IsNullOrEmpty(ffmpegAuto))
         {
             FfmpegAutoDetected = $"自動検出: {ffmpegAuto}";
-            if (!IsFfmpegValid)
-            {
-                IsFfmpegValid = true; // 自動検出でも有効とする
-            }
         }
         else
         {
             FfmpegAutoDetected = "自動検出: 見つかりません";
         }
+
+        ValidatePaths();
     }
 
     private bool CanUpdateYtDlp()

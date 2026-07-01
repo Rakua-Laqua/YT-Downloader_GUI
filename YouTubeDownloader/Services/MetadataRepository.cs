@@ -24,14 +24,16 @@ public class MetadataRepository : IMetadataRepository
 {
     private readonly string _metadataFilePath;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly ILoggingService _logger;
     // 同時ダウンロードの完了が複数ワーカースレッドから同時に保存してくるため、
     // キャッシュ(List)とファイルI/Oへのアクセスを直列化する
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private List<VideoMetadata> _cache = new();
     private bool _loaded;
 
-    public MetadataRepository()
+    public MetadataRepository(ILoggingService? logger = null)
     {
+        _logger = logger ?? new LoggingService();
         var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var appFolder = Path.Combine(appDataPath, "YouTubeDownloader");
         Directory.CreateDirectory(appFolder);
@@ -56,11 +58,32 @@ public class MetadataRepository : IMetadataRepository
                 _cache = JsonSerializer.Deserialize<List<VideoMetadata>>(json, _jsonOptions) ?? new List<VideoMetadata>();
             }
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.Error("ライブラリ履歴ファイルの読み込みに失敗しました。空の履歴として扱います。", ex);
+            TryCopyUnreadableFile(_metadataFilePath);
             _cache = new List<VideoMetadata>();
         }
         _loaded = true;
+    }
+
+    private void TryCopyUnreadableFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            var backupPath = $"{path}.invalid-{DateTime.Now:yyyyMMddHHmmss}";
+            File.Copy(path, backupPath, overwrite: false);
+            _logger.Warn($"読み込めなかったライブラリ履歴ファイルを退避しました: {backupPath}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"読み込めなかったライブラリ履歴ファイルの退避に失敗しました: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private async Task SaveAsync()
