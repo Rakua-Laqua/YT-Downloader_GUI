@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using YouTubeDownloader.Infrastructure;
@@ -56,6 +57,7 @@ public partial class DownloadViewModel : ViewModelBase
     private string _lastVideoQuality = "best";
     private string _lastAudioQuality = "標準 (VBR 5)";
     private bool _pendingDefaultsApply;
+    private readonly Dictionary<Guid, DownloadJobViewModel> _downloadQueueById = new();
 
     public DownloadViewModel(
         IYtDlpClient ytDlpClient,
@@ -79,6 +81,8 @@ public partial class DownloadViewModel : ViewModelBase
         // 設定画面で保存されたら既定値を同期する
         _settingsRepository.SettingsSaved += OnSettingsSaved;
 
+        DownloadQueue.CollectionChanged += OnDownloadQueueCollectionChanged;
+
         // ダウンロードキューを復元
         foreach (var job in _downloadManager.GetAllJobs())
         {
@@ -87,7 +91,6 @@ public partial class DownloadViewModel : ViewModelBase
             DownloadQueue.Add(vm);
         }
 
-        DownloadQueue.CollectionChanged += OnDownloadQueueCollectionChanged;
         UpdateQueueSummary();
     }
 
@@ -444,6 +447,33 @@ public partial class DownloadViewModel : ViewModelBase
 
     private void OnDownloadQueueCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            _downloadQueueById.Clear();
+            foreach (var jobVm in DownloadQueue)
+            {
+                _downloadQueueById[jobVm.Job.Id] = jobVm;
+            }
+        }
+        else
+        {
+            if (e.OldItems != null)
+            {
+                foreach (DownloadJobViewModel jobVm in e.OldItems)
+                {
+                    _downloadQueueById.Remove(jobVm.Job.Id);
+                }
+            }
+
+            if (e.NewItems != null)
+            {
+                foreach (DownloadJobViewModel jobVm in e.NewItems)
+                {
+                    _downloadQueueById[jobVm.Job.Id] = jobVm;
+                }
+            }
+        }
+
         // 新規追加/全削除などで「全件完了」の条件が変わるので、点滅済みフラグをリセット
         _hasFlashedForAllCompleted = false;
         UpdateQueueSummary();
@@ -458,23 +488,27 @@ public partial class DownloadViewModel : ViewModelBase
 
     private void OnJobProgressChanged(object? sender, DownloadJobEventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        Application.Current.Dispatcher.BeginInvoke((Action)(() =>
         {
-            var jobVm = DownloadQueue.FirstOrDefault(j => j.Job.Id == e.Job.Id);
-            jobVm?.UpdateFromJob();
-        });
+            if (_downloadQueueById.TryGetValue(e.Job.Id, out var jobVm))
+            {
+                jobVm.UpdateFromJob();
+            }
+        }), DispatcherPriority.Background);
     }
 
     private void OnJobStatusChanged(object? sender, DownloadJobEventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        Application.Current.Dispatcher.BeginInvoke((Action)(() =>
         {
-            var jobVm = DownloadQueue.FirstOrDefault(j => j.Job.Id == e.Job.Id);
-            jobVm?.UpdateFromJob();
+            if (_downloadQueueById.TryGetValue(e.Job.Id, out var jobVm))
+            {
+                jobVm.UpdateFromJob();
+            }
             UpdateQueueSummary();
 
             MaybeFlashWhenAllCompleted();
-        });
+        }), DispatcherPriority.Background);
     }
 
     private void MaybeFlashWhenAllCompleted()

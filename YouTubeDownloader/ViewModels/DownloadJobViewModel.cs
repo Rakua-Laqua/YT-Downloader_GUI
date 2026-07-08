@@ -132,6 +132,14 @@ public partial class DownloadJobViewModel : ObservableObject
         var sb = new StringBuilder();
         sb.AppendLine("ダウンロード情報");
 
+        if (!string.IsNullOrWhiteSpace(_job.ErrorMessage))
+        {
+            sb.AppendLine();
+            sb.AppendLine("警告");
+            sb.AppendLine(_job.ErrorMessage);
+            sb.AppendLine();
+        }
+
         if (_job.StartedAt.HasValue && _job.CompletedAt.HasValue)
         {
             sb.AppendLine($"経過時間: {FormatElapsed(_job.CompletedAt.Value - _job.StartedAt.Value)}");

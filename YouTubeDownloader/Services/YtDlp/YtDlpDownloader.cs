@@ -16,6 +16,7 @@ internal sealed class YtDlpDownloader
     private readonly YtDlpUpdater _updater;
     private readonly Func<string> _getYtDlpPath;
     private readonly Func<string?> _getFfmpegPath;
+    private static readonly TimeSpan FfprobeTimeout = TimeSpan.FromSeconds(10);
     private string? _cachedYtDlpVersion;
 
     public YtDlpDownloader(
@@ -513,12 +514,18 @@ internal sealed class YtDlpDownloader
             var psi = new ProcessStartInfo
             {
                 FileName = ffprobePath,
-                Arguments = $"-v error -show_entries stream=codec_type,codec_name -of csv=p=0 \"{filePath}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("-v");
+            psi.ArgumentList.Add("error");
+            psi.ArgumentList.Add("-show_entries");
+            psi.ArgumentList.Add("stream=codec_type,codec_name");
+            psi.ArgumentList.Add("-of");
+            psi.ArgumentList.Add("csv=p=0");
+            psi.ArgumentList.Add(filePath);
 
             using var process = Process.Start(psi);
             if (process == null)
@@ -526,8 +533,30 @@ internal sealed class YtDlpDownloader
                 return new ActualFormat(ext, null, null);
             }
 
-            var output = await process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync(CancellationToken.None);
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            using var timeoutCts = new CancellationTokenSource(FfprobeTimeout);
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                TryKillProcess(process);
+                try
+                {
+                    await process.WaitForExitAsync();
+                    await Task.WhenAll(outputTask, errorTask);
+                }
+                catch
+                {
+                    // kill後のストリーム終了待ち失敗も拡張子ベースにフォールバックする
+                }
+                return new ActualFormat(ext, null, null);
+            }
+
+            var output = await outputTask;
+            _ = await errorTask;
 
             string? vcodec = null;
             string? acodec = null;
@@ -562,6 +591,21 @@ internal sealed class YtDlpDownloader
         catch
         {
             return new ActualFormat(ext, null, null);
+        }
+    }
+
+    private static void TryKillProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // ffprobe失敗時は拡張子ベースにフォールバックする
         }
     }
 

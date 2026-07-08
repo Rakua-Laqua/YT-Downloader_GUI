@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## [3.9.4] - 2026-07-08
+
+### 追加
+- ダウンロード完了後の履歴（メタデータ）保存処理が失敗した際、ジョブの警告メッセージとしてUIにエラー内容を表示する機能を追加しました。
+
+### 修正
+- `ffprobe` を用いたフォーマット検証時、引数指定に `ArgumentList` を使用して安全性を向上させ、10秒のタイムアウト処理およびプロセス安全終了（Kill）処理を導入してフリーズを防ぐように修正しました。
+- UIスレッドでのジョブ状態・プログレス更新時に `Application.Current.Dispatcher.BeginInvoke`（`DispatcherPriority.Background`）およびDictionaryによる高速検索（`_downloadQueueById`）を使用することで、UIフリーズやパフォーマンス低下を解消しました。
+- `DownloadManager` のキュー処理（`ProcessQueue`）において、待機状態のタスクが正しく遷移したときのみ実行中カウントを増やすスレッドセーフな実装に修正しました。
+- `DownloadManager` の `Dispose` 時、スレッドセーフにリソースとイベントの解除処理を行うように修正しました。
+
 ## [3.9.3] - 2026-07-08
 
 ### 変更

@@ -141,8 +141,10 @@ public class DownloadManager : IDownloadManager, IDisposable
                 continue;
             }
 
-            _runningDownloads++;
-            waiter.TrySetResult();
+            if (waiter.TrySetResult())
+            {
+                _runningDownloads++;
+            }
         }
     }
 
@@ -223,8 +225,15 @@ public class DownloadManager : IDownloadManager, IDisposable
             job.VideoMetadata.DownloadedAt = DateTime.Now;
             job.VideoMetadata.Format = job.Format;
 
-            // メタデータを保存
-            await _metadataRepository.SaveVideoMetadataAsync(job.VideoMetadata);
+            try
+            {
+                await _metadataRepository.SaveVideoMetadataAsync(job.VideoMetadata);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"メタデータ保存に失敗しました(ダウンロードは完了) [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
+                job.ErrorMessage = $"ダウンロードは完了しましたが、履歴の保存に失敗しました: {ex.Message}";
+            }
 
             JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
         }
@@ -362,13 +371,11 @@ public class DownloadManager : IDownloadManager, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-
-        _settingsRepository.SettingsSaved -= OnSettingsSaved;
-
         lock (_lock)
         {
+            if (_disposed) return;
+            _disposed = true;
+
             foreach (var cts in _cancellationTokens.Values)
             {
                 cts.Cancel();
@@ -380,5 +387,7 @@ public class DownloadManager : IDownloadManager, IDisposable
                 _slotWaiters.Dequeue().TrySetCanceled();
             }
         }
+
+        _settingsRepository.SettingsSaved -= OnSettingsSaved;
     }
 }
