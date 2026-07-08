@@ -87,3 +87,8 @@ graph-viewer.html
 *cookies.txt
 cookies.txt
 *.cookies
+
+# ドキュメントとツールをGit管理から除外
+docs/
+tools/
+
