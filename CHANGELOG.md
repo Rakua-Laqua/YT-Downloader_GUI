@@ -1,4 +1,10 @@
-﻿# CHANGELOG
+# CHANGELOG
+
+## [3.9.6] - 2026-07-10
+
+### 変更
+- `DownloadManager` におけるジョブ状態更新処理やリソース破棄処理をメソッドに抽出し、可読性を向上。
+- `YtDlpDownloader` からダウンロード完了後のファイル形式確認・ログ記録ロジックを `YtDlpFormatInspector` クラスへ分離。
 
 ## [3.9.5] - 2026-07-10
 

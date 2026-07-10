@@ -176,16 +176,8 @@ public class DownloadManager : IDownloadManager, IDisposable
 
     private async Task ProcessJobAsync(DownloadJob job)
     {
-        var cts = new CancellationTokenSource();
+        var cts = CreateAndRegisterCancellationToken(job);
         var semaphoreAcquired = false;
-        lock (_lock)
-        {
-            _cancellationTokens[job.Id] = cts;
-            if (job.Status == DownloadStatus.Canceled)
-            {
-                cts.Cancel();
-            }
-        }
 
         // 「どのタイミングで」を追えるよう、キュー待機(セマフォ取得)にかかった時間も記録する
         var waitStopwatch = Stopwatch.StartNew();
@@ -196,67 +188,22 @@ public class DownloadManager : IDownloadManager, IDisposable
             cts.Token.ThrowIfCancellationRequested();
             waitStopwatch.Stop();
 
-            job.Status = DownloadStatus.Running;
-            job.StartedAt = DateTime.Now;
-            job.Progress = 0;
-            job.IsPostProcessing = false;
-            _logger.Info($"ジョブ開始 [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}> / キュー待機 {waitStopwatch.Elapsed.TotalSeconds:F1}秒");
-            JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
-
-            var progress = new Progress<ProgressInfo>(info =>
-            {
-                job.Progress = info.Percentage;
-                job.IsPostProcessing = info.IsPostProcessing;
-                if (!string.IsNullOrWhiteSpace(info.Status))
-                {
-                    job.StatusMessage = info.Status;
-                }
-
-                JobProgressChanged?.Invoke(this, new DownloadJobEventArgs(job));
-            });
-
-            await _ytDlpClient.DownloadAsync(job, progress, cts.Token);
-
-            job.Status = DownloadStatus.Completed;
-            job.Progress = 100;
-            job.IsPostProcessing = false;
-            job.StatusMessage = null;
-            job.CompletedAt = DateTime.Now;
-            job.VideoMetadata.DownloadedAt = DateTime.Now;
-            job.VideoMetadata.Format = job.Format;
-
-            try
-            {
-                await _metadataRepository.SaveVideoMetadataAsync(job.VideoMetadata);
-            }
-            catch (Exception ex)
-            {
-                _logger.Error($"メタデータ保存に失敗しました(ダウンロードは完了) [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
-                job.ErrorMessage = $"ダウンロードは完了しましたが、履歴の保存に失敗しました: {ex.Message}";
-            }
-
-            JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+            MarkJobRunning(job, waitStopwatch.Elapsed);
+            await _ytDlpClient.DownloadAsync(job, CreateProgressReporter(job), cts.Token);
+            await CompleteJobAsync(job);
         }
         catch (OperationCanceledException)
         {
-            _logger.Info($"ジョブをキャンセルしました [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>");
-            var shouldNotify = job.Status != DownloadStatus.Canceled;
-            job.Status = DownloadStatus.Canceled;
-            if (shouldNotify)
-            {
-                JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
-            }
+            MarkJobCanceled(job);
         }
         catch (YtDlpDownloadException ex)
         {
             _logger.Error($"ジョブ失敗(yt-dlp) [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
-            job.Status = DownloadStatus.Failed;
-            job.ErrorMessage = ex.Message;
             if (string.IsNullOrWhiteSpace(job.FailureDetail) && !string.IsNullOrWhiteSpace(ex.FailureDetail))
             {
                 job.FailureDetail = ex.FailureDetail;
             }
-            JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+            MarkJobFailed(job, ex.Message);
         }
         catch (Exception ex)
         {
@@ -264,24 +211,107 @@ public class DownloadManager : IDownloadManager, IDisposable
             // 例外の型とスタックトレース(=どのC#処理で発生したか)を残す。
             // 例: メタデータ保存の失敗もここに来るため、スタックトレースで発生箇所を特定できる。
             _logger.Error($"ジョブ失敗 [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
-            job.Status = DownloadStatus.Failed;
-            job.ErrorMessage = ex.Message;
-            JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+            MarkJobFailed(job, ex.Message);
         }
         finally
         {
-            lock (_lock)
+            CleanupJobProcessing(job, cts, semaphoreAcquired);
+        }
+    }
+
+    private CancellationTokenSource CreateAndRegisterCancellationToken(DownloadJob job)
+    {
+        var cts = new CancellationTokenSource();
+        lock (_lock)
+        {
+            _cancellationTokens[job.Id] = cts;
+            if (job.Status == DownloadStatus.Canceled)
             {
-                if (_cancellationTokens.TryGetValue(job.Id, out var currentCts) && ReferenceEquals(currentCts, cts))
-                {
-                    _cancellationTokens.Remove(job.Id);
-                }
+                cts.Cancel();
             }
-            cts.Dispose();
-            if (semaphoreAcquired)
+        }
+        return cts;
+    }
+
+    private void MarkJobRunning(DownloadJob job, TimeSpan queueWait)
+    {
+        job.Status = DownloadStatus.Running;
+        job.StartedAt = DateTime.Now;
+        job.Progress = 0;
+        job.IsPostProcessing = false;
+        _logger.Info($"ジョブ開始 [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}> / キュー待機 {queueWait.TotalSeconds:F1}秒");
+        JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+    }
+
+    private IProgress<ProgressInfo> CreateProgressReporter(DownloadJob job)
+    {
+        return new Progress<ProgressInfo>(info =>
+        {
+            job.Progress = info.Percentage;
+            job.IsPostProcessing = info.IsPostProcessing;
+            if (!string.IsNullOrWhiteSpace(info.Status))
             {
-                ReleaseDownloadSlot();
+                job.StatusMessage = info.Status;
             }
+
+            JobProgressChanged?.Invoke(this, new DownloadJobEventArgs(job));
+        });
+    }
+
+    private async Task CompleteJobAsync(DownloadJob job)
+    {
+        job.Status = DownloadStatus.Completed;
+        job.Progress = 100;
+        job.IsPostProcessing = false;
+        job.StatusMessage = null;
+        job.CompletedAt = DateTime.Now;
+        job.VideoMetadata.DownloadedAt = DateTime.Now;
+        job.VideoMetadata.Format = job.Format;
+
+        try
+        {
+            await _metadataRepository.SaveVideoMetadataAsync(job.VideoMetadata);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"メタデータ保存に失敗しました(ダウンロードは完了) [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
+            job.ErrorMessage = $"ダウンロードは完了しましたが、履歴の保存に失敗しました: {ex.Message}";
+        }
+
+        JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+    }
+
+    private void MarkJobCanceled(DownloadJob job)
+    {
+        _logger.Info($"ジョブをキャンセルしました [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>");
+        var shouldNotify = job.Status != DownloadStatus.Canceled;
+        job.Status = DownloadStatus.Canceled;
+        if (shouldNotify)
+        {
+            JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+        }
+    }
+
+    private void MarkJobFailed(DownloadJob job, string errorMessage)
+    {
+        job.Status = DownloadStatus.Failed;
+        job.ErrorMessage = errorMessage;
+        JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
+    }
+
+    private void CleanupJobProcessing(DownloadJob job, CancellationTokenSource cts, bool semaphoreAcquired)
+    {
+        lock (_lock)
+        {
+            if (_cancellationTokens.TryGetValue(job.Id, out var currentCts) && ReferenceEquals(currentCts, cts))
+            {
+                _cancellationTokens.Remove(job.Id);
+            }
+        }
+        cts.Dispose();
+        if (semaphoreAcquired)
+        {
+            ReleaseDownloadSlot();
         }
     }
 

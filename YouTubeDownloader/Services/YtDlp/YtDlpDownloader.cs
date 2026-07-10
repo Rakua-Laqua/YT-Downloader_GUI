@@ -16,7 +16,7 @@ internal sealed class YtDlpDownloader
     private readonly YtDlpUpdater _updater;
     private readonly Func<string> _getYtDlpPath;
     private readonly Func<string?> _getFfmpegPath;
-    private static readonly TimeSpan FfprobeTimeout = TimeSpan.FromSeconds(10);
+    private readonly YtDlpFormatInspector _formatInspector;
     private string? _cachedYtDlpVersion;
 
     public YtDlpDownloader(
@@ -31,6 +31,7 @@ internal sealed class YtDlpDownloader
         _updater = updater;
         _getYtDlpPath = getYtDlpPath;
         _getFfmpegPath = getFfmpegPath;
+        _formatInspector = new YtDlpFormatInspector(logger);
     }
 
     public async Task DownloadAsync(DownloadJob job, IProgress<ProgressInfo>? progress, CancellationToken cancellationToken = default)
@@ -89,7 +90,7 @@ internal sealed class YtDlpDownloader
 
             _logger.Info($"ダウンロード成功 {jobLabel} / 出力=\"{job.VideoMetadata.LocalFilePath}\"");
 
-            await ApplyFormatInfoAsync(job, ffmpegPath, sourceFormatFile).ConfigureAwait(false);
+            await _formatInspector.ApplyFormatInfoAsync(job, ffmpegPath, sourceFormatFile).ConfigureAwait(false);
 
             CleanupFallbackLeftovers(jobLabel, outputPath, requestedFormat, firstRunFailed, processStartedAtUtc);
         }
@@ -273,21 +274,6 @@ internal sealed class YtDlpDownloader
         }
     }
 
-    private async Task ApplyFormatInfoAsync(DownloadJob job, string? ffmpegPath, string sourceFormatFile)
-    {
-        var sourceFmt = ReadSourceFormat(sourceFormatFile);
-        job.SourceExt = sourceFmt?.Ext;
-        job.SourceVcodec = sourceFmt?.Vcodec;
-        job.SourceAcodec = sourceFmt?.Acodec;
-
-        var actualFmt = await ProbeFileFormatAsync(job.VideoMetadata.LocalFilePath, ffmpegPath).ConfigureAwait(false);
-        job.ActualExt = actualFmt?.Ext;
-        job.ActualVcodec = actualFmt?.Vcodec;
-        job.ActualAcodec = actualFmt?.Acodec;
-
-        CompareAndLogFormats(job);
-    }
-
     private static void TryDeleteTempFile(string? path)
     {
         if (string.IsNullOrEmpty(path))
@@ -446,11 +432,41 @@ internal sealed class YtDlpDownloader
             : _getFfmpegPath();
     }
 
+}
+
+/// <summary>
+/// ダウンロード後のファイル形式を検査し、ソース形式との比較結果をジョブとログへ反映する。
+/// </summary>
+internal sealed class YtDlpFormatInspector
+{
+    private static readonly TimeSpan FfprobeTimeout = TimeSpan.FromSeconds(10);
+    private readonly ILoggingService _logger;
+
+    public YtDlpFormatInspector(ILoggingService logger)
+    {
+        _logger = logger;
+    }
+
     private sealed record SourceFormat(string? Ext, string Vcodec, string Acodec);
 
     private sealed record ActualFormat(string? Ext, string? Vcodec, string? Acodec);
 
     private sealed record FfprobeOutput(string StandardOutput, string StandardError);
+
+    public async Task ApplyFormatInfoAsync(DownloadJob job, string? ffmpegPath, string sourceFormatFile)
+    {
+        var sourceFmt = ReadSourceFormat(sourceFormatFile);
+        job.SourceExt = sourceFmt?.Ext;
+        job.SourceVcodec = sourceFmt?.Vcodec;
+        job.SourceAcodec = sourceFmt?.Acodec;
+
+        var actualFmt = await ProbeFileFormatAsync(job.VideoMetadata.LocalFilePath, ffmpegPath).ConfigureAwait(false);
+        job.ActualExt = actualFmt?.Ext;
+        job.ActualVcodec = actualFmt?.Vcodec;
+        job.ActualAcodec = actualFmt?.Acodec;
+
+        CompareAndLogFormats(job);
+    }
 
     /// <summary>
     /// yt-dlpが書き出したソースフォーマット("ext|vcodec|acodec"形式)を読み取る。
