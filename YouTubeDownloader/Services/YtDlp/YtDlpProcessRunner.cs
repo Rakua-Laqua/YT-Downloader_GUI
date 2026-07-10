@@ -96,7 +96,7 @@ internal static class YtDlpProcessRunner
         return Encoding.UTF8;
     }
 
-    private static void KillProcessTree(Process process)
+    internal static void KillProcessTree(Process process)
     {
         try
         {

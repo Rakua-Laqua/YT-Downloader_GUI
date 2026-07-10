@@ -16,6 +16,7 @@ internal sealed class YtDlpDownloader
     private readonly YtDlpUpdater _updater;
     private readonly Func<string> _getYtDlpPath;
     private readonly Func<string?> _getFfmpegPath;
+    private static readonly TimeSpan FfprobeTimeout = TimeSpan.FromSeconds(10);
     private string? _cachedYtDlpVersion;
 
     public YtDlpDownloader(
@@ -37,50 +38,11 @@ internal sealed class YtDlpDownloader
         var jobLabel = YtDlpFailureFormatter.BuildJobLabel(job);
         _logger.Info($"ダウンロード開始 {jobLabel} / 形式={job.Format} 品質={job.Quality} 保存先=\"{job.SaveFolderPath}\"");
 
-        // URLが空の場合はエラー
-        if (string.IsNullOrEmpty(job.VideoMetadata.Url))
-        {
-            const string msg = "動画URLが指定されていません";
-            job.FailureDetail = YtDlpFailureFormatter.BuildPreflightFailureDetail(job, "準備(URL検証)", msg, null);
-            _logger.Error($"ダウンロード失敗 {jobLabel} / フェーズ=準備(URL検証): {msg}");
-            throw new Exception(msg);
-        }
+        ValidateJobUrl(job, jobLabel);
 
-        // 準備段階(実行ファイル検出・保存先作成・出力パス構築)は失敗フェーズが分かるよう個別に記録する
-        string ytDlpPath;
-        try
-        {
-            ytDlpPath = _getYtDlpPath();
-        }
-        catch (Exception ex)
-        {
-            job.FailureDetail = YtDlpFailureFormatter.BuildPreflightFailureDetail(job, "準備(yt-dlp検出)", ex.Message, ex);
-            _logger.Error($"ダウンロード失敗 {jobLabel} / フェーズ=準備(yt-dlp検出)", ex);
-            throw;
-        }
-
-        await _updater.EnsureYtDlpUpdatedAsync(ytDlpPath, cancellationToken);
-        var settings = _settingsRepository.Load();
-
-        string outputPath;
-        string requestedFormat;
-        try
-        {
-            // 保存先フォルダを作成
-            Directory.CreateDirectory(job.SaveFolderPath);
-
-            // ファイル名テンプレートを構築
-            var template = YtDlpOutputPathResolver.BuildFilenameTemplate(settings.FilenameTemplate, job);
-            outputPath = YtDlpOutputPathResolver.BuildOutputPath(job.SaveFolderPath, template);
-
-            requestedFormat = YtDlpArgumentBuilder.NormalizeFormat(job.Format);
-        }
-        catch (Exception ex)
-        {
-            job.FailureDetail = YtDlpFailureFormatter.BuildPreflightFailureDetail(job, "準備(保存先/出力パス構築)", ex.Message, ex);
-            _logger.Error($"ダウンロード失敗 {jobLabel} / フェーズ=準備(保存先/出力パス構築)", ex);
-            throw;
-        }
+        var ytDlpPath = ResolveYtDlpPath(job, jobLabel);
+        var settings = await PrepareYtDlpAndLoadSettingsAsync(job, jobLabel, ytDlpPath, cancellationToken).ConfigureAwait(false);
+        var (outputPath, requestedFormat) = BuildOutputPathAndFormat(job, jobLabel, settings);
 
         // mp3 / wav は再エンコード(transcode)が走る。ffmpegに変換進捗をファイル出力させ、
         // 動画長と突き合わせて「音声変換中」の実進捗を出すための一時ファイルを用意する。
@@ -111,148 +73,238 @@ internal sealed class YtDlpDownloader
         var firstRunFailed = false;
         try
         {
-            _logger.Info($"yt-dlp 実行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(arguments)}");
-            var firstRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, arguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
-            LogRunSummary(jobLabel, "yt-dlp 初回出力要約", firstRun);
-
-            if (firstRun.ExitCode != 0)
-            {
-                firstRunFailed = true;
-
-                // bot検知・年齢制限・非公開・メンバー限定・429・地域制限・著作権・URL不正など、別clientで
-                // 再試行しても回復しない既知エラーは即座に失敗として扱う。特に bot/429 は無駄な再アクセスが
-                // IP制限（bot判定）を悪化させるため、再試行しないことが取得成功率の維持にもつながる。
-                if (!YtDlpFailureFormatter.ShouldRetryWithFallbackClient(firstRun))
-                {
-                    var ytDlpVersionNoRetry = await GetYtDlpVersionForLogAsync(ytDlpPath);
-                    var singleDetail = YtDlpFailureFormatter.BuildDownloadFailureDetail(job, ytDlpVersionNoRetry, arguments, firstRun);
-                    job.FailureDetail = singleDetail;
-                    _logger.Error($"ダウンロード失敗（別clientでも回復不能と判断し再試行せず） {jobLabel}{Environment.NewLine}{singleDetail}");
-                    throw new Exception($"ダウンロードに失敗しました:\n{YtDlpFailureFormatter.DescribeError(firstRun)}");
-                }
-
-                _logger.Warn($"yt-dlp 初回失敗 {jobLabel} / 終了コード={firstRun.ExitCode} 失敗フェーズ={firstRun.LastPhase} 経過={firstRun.Elapsed.TotalSeconds:F1}秒。フォールバックclientで再試行します。");
-
-                // 初回(tv等)が回復可能な理由で失敗した場合は、別のplayer client群で1回だけ再試行する。
-                var retryArguments = YtDlpArgumentBuilder.BuildFallbackClientArguments(arguments, settings);
-
-                _logger.Info($"yt-dlp 再試行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(retryArguments)}");
-                var retryRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken);
-                LogRunSummary(jobLabel, "yt-dlp 再試行出力要約", retryRun);
-
-                if (retryRun.ExitCode != 0)
-                {
-                    // 失敗の「どのタイミングで・なぜ」が後から追えるよう、両試行の終了コード・失敗フェーズ・
-                    // 経過時間・実行コマンド・stderr全文・yt-dlpバージョンをまとめて記録する。
-                    var ytDlpVersion = await GetYtDlpVersionForLogAsync(ytDlpPath);
-                    var detail = YtDlpFailureFormatter.BuildDownloadFailureDetail(job, ytDlpVersion, arguments, retryArguments, firstRun, retryRun);
-                    job.FailureDetail = detail;
-                    _logger.Error($"ダウンロード失敗 {jobLabel}{Environment.NewLine}{detail}");
-
-                    // 既知のエラーパターンは正確な原因・対処に翻訳して利用者に提示する
-                    var combinedReason = YtDlpFailureFormatter.BuildUserFacingDownloadReason(firstRun, retryRun);
-                    throw new Exception($"ダウンロードに失敗しました:\n{combinedReason}");
-                }
-
-                _logger.Info($"yt-dlp 再試行成功 {jobLabel} / 経過={retryRun.Elapsed.TotalSeconds:F1}秒");
-                _logger.Warn(
-                    $"yt-dlp 初回失敗診断 {jobLabel}{Environment.NewLine}" +
-                    YtDlpFailureFormatter.BuildAttemptDiagnosticDetail("初回試行", arguments, firstRun));
-            }
+            firstRunFailed = await RunDownloadWithFallbackAsync(
+                job,
+                jobLabel,
+                ytDlpPath,
+                arguments,
+                settings,
+                progress,
+                conversionProgressFile,
+                durationSeconds,
+                cancellationToken).ConfigureAwait(false);
 
             var infoResult = YtDlpOutputPathResolver.ReadDownloadInfoFile(downloadInfoFile);
-
-            // 1) yt-dlpが書き出した正確なファイルパスがある場合、それを最優先で使用する
-            if (!string.IsNullOrEmpty(infoResult.FilePath) && File.Exists(infoResult.FilePath))
-            {
-                job.VideoMetadata.LocalFilePath = infoResult.FilePath;
-            }
-            else
-            {
-                // 2) 取得できなかった場合のフォールバックとして、従来の走査（推測）を行う
-                YtDlpOutputPathResolver.UpdateLocalFilePath(job, outputPath, requestedFormat);
-            }
-
-            // 更新日時のみ公開時刻に合わせる（作成日時はダウンロード時刻のまま残す）
-            if (settings.SetFileDateToPublishDate
-                && !string.IsNullOrEmpty(job.VideoMetadata.LocalFilePath)
-                && File.Exists(job.VideoMetadata.LocalFilePath)
-                && infoResult.PublishTime.HasValue)
-            {
-                var publishTime = infoResult.PublishTime.Value;
-                // timestamp由来はUTC絶対時刻なのでSetLastWriteTimeUtcで保存する。
-                // こうするとWindowsは閲覧側PCのローカル時刻に変換して表示する。
-                // upload_date由来は時刻が無いためローカル0時として保存する。
-                if (publishTime.Kind == DateTimeKind.Utc)
-                {
-                    File.SetLastWriteTimeUtc(job.VideoMetadata.LocalFilePath, publishTime);
-                }
-                else
-                {
-                    File.SetLastWriteTime(job.VideoMetadata.LocalFilePath, publishTime);
-                }
-            }
+            ApplyDownloadedFileInfo(job, settings, outputPath, requestedFormat, infoResult);
 
             _logger.Info($"ダウンロード成功 {jobLabel} / 出力=\"{job.VideoMetadata.LocalFilePath}\"");
 
-            // ソースフォーマット(yt-dlp選択)と実ファイル(ffprobe)を突き合わせて検証・ログ出力する
-            var sourceFmt = ReadSourceFormat(sourceFormatFile);
-            job.SourceExt = sourceFmt?.Ext;
-            job.SourceVcodec = sourceFmt?.Vcodec;
-            job.SourceAcodec = sourceFmt?.Acodec;
-
-            var actualFmt = await ProbeFileFormatAsync(job.VideoMetadata.LocalFilePath, ffmpegPath);
-            job.ActualExt = actualFmt?.Ext;
-            job.ActualVcodec = actualFmt?.Vcodec;
-            job.ActualAcodec = actualFmt?.Acodec;
-
-            CompareAndLogFormats(job);
+            await ApplyFormatInfoAsync(job, ffmpegPath, sourceFormatFile).ConfigureAwait(false);
 
             CleanupFallbackLeftovers(jobLabel, outputPath, requestedFormat, firstRunFailed, processStartedAtUtc);
         }
         finally
         {
-            if (conversionProgressFile != null)
-            {
-                try
-                {
-                    if (File.Exists(conversionProgressFile))
-                    {
-                        File.Delete(conversionProgressFile);
-                    }
-                }
-                catch
-                {
-                    // 一時ファイルの削除失敗は無視
-                }
-            }
+            TryDeleteTempFile(conversionProgressFile);
+            TryDeleteTempFile(downloadInfoFile);
+            TryDeleteTempFile(sourceFormatFile);
+        }
+    }
 
-            if (downloadInfoFile != null)
-            {
-                try
-                {
-                    if (File.Exists(downloadInfoFile))
-                    {
-                        File.Delete(downloadInfoFile);
-                    }
-                }
-                catch
-                {
-                    // 一時ファイルの削除失敗は無視
-                }
-            }
+    private void ValidateJobUrl(DownloadJob job, string jobLabel)
+    {
+        if (!string.IsNullOrEmpty(job.VideoMetadata.Url))
+        {
+            return;
+        }
 
-            try
+        const string msg = "動画URLが指定されていません";
+        var detail = YtDlpFailureFormatter.BuildPreflightFailureDetail(job, "準備(URL検証)", msg, null);
+        job.FailureDetail = detail;
+        _logger.Error($"ダウンロード失敗 {jobLabel} / フェーズ=準備(URL検証): {msg}");
+        throw new YtDlpDownloadException(msg, detail);
+    }
+
+    private string ResolveYtDlpPath(DownloadJob job, string jobLabel)
+    {
+        try
+        {
+            return _getYtDlpPath();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw BuildPreflightException(job, jobLabel, "準備(yt-dlp検出)", ex.Message, ex);
+        }
+    }
+
+    private async Task<AppSettings> PrepareYtDlpAndLoadSettingsAsync(
+        DownloadJob job,
+        string jobLabel,
+        string ytDlpPath,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _updater.EnsureYtDlpUpdatedAsync(ytDlpPath, cancellationToken).ConfigureAwait(false);
+            return _settingsRepository.Load();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw BuildPreflightException(job, jobLabel, "準備(yt-dlp更新/設定読み込み)", ex.Message, ex);
+        }
+    }
+
+    private (string OutputPath, string RequestedFormat) BuildOutputPathAndFormat(
+        DownloadJob job,
+        string jobLabel,
+        AppSettings settings)
+    {
+        try
+        {
+            Directory.CreateDirectory(job.SaveFolderPath);
+
+            var template = YtDlpOutputPathResolver.BuildFilenameTemplate(settings.FilenameTemplate, job);
+            var outputPath = YtDlpOutputPathResolver.BuildOutputPath(job.SaveFolderPath, template);
+            var requestedFormat = YtDlpArgumentBuilder.NormalizeFormat(job.Format);
+            return (outputPath, requestedFormat);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw BuildPreflightException(job, jobLabel, "準備(保存先/出力パス構築)", ex.Message, ex);
+        }
+    }
+
+    private YtDlpDownloadException BuildPreflightException(
+        DownloadJob job,
+        string jobLabel,
+        string phase,
+        string reason,
+        Exception exception)
+    {
+        var detail = YtDlpFailureFormatter.BuildPreflightFailureDetail(job, phase, reason, exception);
+        job.FailureDetail = detail;
+        _logger.Error($"ダウンロード失敗 {jobLabel} / フェーズ={phase}", exception);
+        return new YtDlpDownloadException(reason, detail, innerException: exception);
+    }
+
+    private async Task<bool> RunDownloadWithFallbackAsync(
+        DownloadJob job,
+        string jobLabel,
+        string ytDlpPath,
+        List<string> arguments,
+        AppSettings settings,
+        IProgress<ProgressInfo>? progress,
+        string? conversionProgressFile,
+        int durationSeconds,
+        CancellationToken cancellationToken)
+    {
+        _logger.Info($"yt-dlp 実行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(arguments)}");
+        var firstRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, arguments, progress, conversionProgressFile, durationSeconds, cancellationToken, _logger).ConfigureAwait(false);
+        LogRunSummary(jobLabel, "yt-dlp 初回出力要約", firstRun);
+
+        if (firstRun.ExitCode == 0)
+        {
+            return false;
+        }
+
+        if (!YtDlpFailureFormatter.ShouldRetryWithFallbackClient(firstRun))
+        {
+            var ytDlpVersionNoRetry = await GetYtDlpVersionForLogAsync(ytDlpPath).ConfigureAwait(false);
+            var singleDetail = YtDlpFailureFormatter.BuildDownloadFailureDetail(job, ytDlpVersionNoRetry, arguments, firstRun);
+            job.FailureDetail = singleDetail;
+            _logger.Error($"ダウンロード失敗（別clientでも回復不能と判断し再試行せず） {jobLabel}{Environment.NewLine}{singleDetail}");
+            throw new YtDlpDownloadException(
+                $"ダウンロードに失敗しました:\n{YtDlpFailureFormatter.DescribeError(firstRun)}",
+                singleDetail);
+        }
+
+        _logger.Warn($"yt-dlp 初回失敗 {jobLabel} / 終了コード={firstRun.ExitCode} 失敗フェーズ={firstRun.LastPhase} 経過={firstRun.Elapsed.TotalSeconds:F1}秒。フォールバックclientで再試行します。");
+
+        var retryArguments = YtDlpArgumentBuilder.BuildFallbackClientArguments(arguments, settings);
+
+        _logger.Info($"yt-dlp 再試行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(retryArguments)}");
+        var retryRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, retryArguments, progress, conversionProgressFile, durationSeconds, cancellationToken, _logger).ConfigureAwait(false);
+        LogRunSummary(jobLabel, "yt-dlp 再試行出力要約", retryRun);
+
+        if (retryRun.ExitCode != 0)
+        {
+            var ytDlpVersion = await GetYtDlpVersionForLogAsync(ytDlpPath).ConfigureAwait(false);
+            var detail = YtDlpFailureFormatter.BuildDownloadFailureDetail(job, ytDlpVersion, arguments, retryArguments, firstRun, retryRun);
+            job.FailureDetail = detail;
+            _logger.Error($"ダウンロード失敗 {jobLabel}{Environment.NewLine}{detail}");
+
+            var combinedReason = YtDlpFailureFormatter.BuildUserFacingDownloadReason(firstRun, retryRun);
+            throw new YtDlpDownloadException(
+                $"ダウンロードに失敗しました:\n{combinedReason}",
+                detail,
+                retriedWithFallbackClient: true);
+        }
+
+        _logger.Info($"yt-dlp 再試行成功 {jobLabel} / 経過={retryRun.Elapsed.TotalSeconds:F1}秒");
+        _logger.Warn(
+            $"yt-dlp 初回失敗診断 {jobLabel}{Environment.NewLine}" +
+            YtDlpFailureFormatter.BuildAttemptDiagnosticDetail("初回試行", arguments, firstRun));
+
+        return true;
+    }
+
+    private static void ApplyDownloadedFileInfo(
+        DownloadJob job,
+        AppSettings settings,
+        string outputPath,
+        string requestedFormat,
+        YtDlpDownloadInfoResult infoResult)
+    {
+        if (!string.IsNullOrEmpty(infoResult.FilePath) && File.Exists(infoResult.FilePath))
+        {
+            job.VideoMetadata.LocalFilePath = infoResult.FilePath;
+        }
+        else
+        {
+            YtDlpOutputPathResolver.UpdateLocalFilePath(job, outputPath, requestedFormat);
+        }
+
+        if (!settings.SetFileDateToPublishDate
+            || string.IsNullOrEmpty(job.VideoMetadata.LocalFilePath)
+            || !File.Exists(job.VideoMetadata.LocalFilePath)
+            || !infoResult.PublishTime.HasValue)
+        {
+            return;
+        }
+
+        var publishTime = infoResult.PublishTime.Value;
+        if (publishTime.Kind == DateTimeKind.Utc)
+        {
+            File.SetLastWriteTimeUtc(job.VideoMetadata.LocalFilePath, publishTime);
+        }
+        else
+        {
+            File.SetLastWriteTime(job.VideoMetadata.LocalFilePath, publishTime);
+        }
+    }
+
+    private async Task ApplyFormatInfoAsync(DownloadJob job, string? ffmpegPath, string sourceFormatFile)
+    {
+        var sourceFmt = ReadSourceFormat(sourceFormatFile);
+        job.SourceExt = sourceFmt?.Ext;
+        job.SourceVcodec = sourceFmt?.Vcodec;
+        job.SourceAcodec = sourceFmt?.Acodec;
+
+        var actualFmt = await ProbeFileFormatAsync(job.VideoMetadata.LocalFilePath, ffmpegPath).ConfigureAwait(false);
+        job.ActualExt = actualFmt?.Ext;
+        job.ActualVcodec = actualFmt?.Vcodec;
+        job.ActualAcodec = actualFmt?.Acodec;
+
+        CompareAndLogFormats(job);
+    }
+
+    private static void TryDeleteTempFile(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(path))
             {
-                if (File.Exists(sourceFormatFile))
-                {
-                    File.Delete(sourceFormatFile);
-                }
+                File.Delete(path);
             }
-            catch
-            {
-                // 一時ファイルの削除失敗は無視
-            }
+        }
+        catch
+        {
+            // 一時ファイルの削除失敗は無視
         }
     }
 
@@ -462,12 +514,18 @@ internal sealed class YtDlpDownloader
             var psi = new ProcessStartInfo
             {
                 FileName = ffprobePath,
-                Arguments = $"-v error -show_entries stream=codec_type,codec_name -of csv=p=0 \"{filePath}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("-v");
+            psi.ArgumentList.Add("error");
+            psi.ArgumentList.Add("-show_entries");
+            psi.ArgumentList.Add("stream=codec_type,codec_name");
+            psi.ArgumentList.Add("-of");
+            psi.ArgumentList.Add("csv=p=0");
+            psi.ArgumentList.Add(filePath);
 
             using var process = Process.Start(psi);
             if (process == null)
@@ -475,8 +533,30 @@ internal sealed class YtDlpDownloader
                 return new ActualFormat(ext, null, null);
             }
 
-            var output = await process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync(CancellationToken.None);
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            using var timeoutCts = new CancellationTokenSource(FfprobeTimeout);
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                TryKillProcess(process);
+                try
+                {
+                    await process.WaitForExitAsync();
+                    await Task.WhenAll(outputTask, errorTask);
+                }
+                catch
+                {
+                    // kill後のストリーム終了待ち失敗も拡張子ベースにフォールバックする
+                }
+                return new ActualFormat(ext, null, null);
+            }
+
+            var output = await outputTask;
+            _ = await errorTask;
 
             string? vcodec = null;
             string? acodec = null;
@@ -511,6 +591,21 @@ internal sealed class YtDlpDownloader
         catch
         {
             return new ActualFormat(ext, null, null);
+        }
+    }
+
+    private static void TryKillProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // ffprobe失敗時は拡張子ベースにフォールバックする
         }
     }
 

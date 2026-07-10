@@ -21,6 +21,7 @@ Windows 用の YouTube 動画・音声ダウンローダーです。WPF + .NET 8
 - ファイル更新日時を動画の公開時刻へ合わせる設定
 - メタデータの「年」タグを公開年へ修正する設定
 - yt-dlp の自動更新、手動更新、stable / nightly チャンネル切り替え
+- cookies.txt を使った認証(年齢制限・メンバー限定・非公開動画やbot検知対策、任意設定)
 - プレイリスト取得漏れの警告表示
 - ダウンロード失敗時の詳細コピー
 - 実行ログの保存
@@ -91,6 +92,7 @@ Windows 用の YouTube 動画・音声ダウンローダーです。WPF + .NET 8
 - ファイル更新日時を動画の公開時刻に合わせるか
 - メタデータの「年」を公開年に修正するか
 - ファイル名テンプレート
+- 認証用 cookies.txt のパス(任意設定。年齢制限・メンバー限定・非公開動画や、一時的なbot検知が発生した動画の取得・解析に利用)
 
 ファイル名テンプレートでは次のプレースホルダーを使用できます。
 
@@ -99,8 +101,7 @@ Windows 用の YouTube 動画・音声ダウンローダーです。WPF + .NET 8
 | `{title}` | 動画タイトル |
 | `{channel}` | チャンネル名 |
 | `{id}` | 動画 ID |
-| `{index}` | プレイリスト内の番号 |
-| `{index:02d}` | 2 桁表記のプレイリスト内番号 |
+| `{index}` | プレイリスト内の番号(2 桁のゼロ埋め表記。`{index:02d}` も同じ結果になります) |
 
 拡張子を指定しない場合は、yt-dlp の出力拡張子 `%(ext)s` が自動で付きます。絶対パスや `..` で保存先フォルダー外を指すテンプレートはエラーになります。
 
@@ -135,56 +136,29 @@ dotnet build .\YouTubeDownloader\YouTubeDownloader.csproj -c Release
 
 ## 配布ビルド
 
-配布用の成果物は `publish.ps1` で作成します。
+配布用の成果物は `dotnet publish` で作成します(ビルド・リリース補助スクリプト `publish.ps1` / `release.ps1` は v3.7.0 で削除済みです)。
 
-| モード | 内容 |
-|---|---|
-| `framework-dependent` | .NET Runtime を同梱しない軽量版 |
-| `self-contained` | .NET Runtime を同梱する単体実行版 |
-| `both` | 上記 2 種類をまとめて作成 |
+| モード | 内容 | `--self-contained` |
+|---|---|---|
+| framework-dependent | .NET Runtime を同梱しない軽量版 | `false` |
+| self-contained | .NET Runtime を同梱する単体実行版 | `true` |
 
 ```powershell
 # 軽量版
-.\publish.ps1 -Mode framework-dependent -Zip -Clean
+dotnet publish .\YouTubeDownloader\YouTubeDownloader.csproj -c Release -r win-x64 --self-contained false -o artifacts\publish\win-x64\framework-dependent
 
 # 自己完結版
-.\publish.ps1 -Mode self-contained -Zip -Clean
-
-# 両方
-.\publish.ps1 -Mode both -Zip -Clean
+dotnet publish .\YouTubeDownloader\YouTubeDownloader.csproj -c Release -r win-x64 --self-contained true -o artifacts\publish\win-x64\self-contained
 ```
 
-出力先は次のとおりです。
+`-r` には `win-x64` / `win-x86` / `win-arm64` などのランタイム識別子を指定できます。
 
-- publish 出力: `artifacts\publish\<runtime>\<mode>\`
-- ZIP 出力: `artifacts\dist\<runtime>\YouTubeDownloader-v<version>-<runtime>-<mode>.zip`
+`yt-dlp.exe` / `ffmpeg.exe` / `ffprobe.exe` を同梱する場合は、`dotnet publish` の出力フォルダーへ手動でコピーしたうえで ZIP 化してください。
 
-`-IncludeTools` を付けると、出力フォルダー名と ZIP 名に `-with-tools` が付きます。このスイッチは名前を変えるだけなので、`yt-dlp.exe` / `ffmpeg.exe` / `ffprobe.exe` を同梱したい場合は、ZIP 化前に出力フォルダーへ配置してください。
-
-```powershell
-.\publish.ps1 -Mode self-contained -IncludeTools -Clean
-
-# artifacts\publish\win-x64\self-contained-with-tools\ に
-# yt-dlp.exe, ffmpeg.exe, ffprobe.exe を配置
-
-.\publish.ps1 -Mode self-contained -IncludeTools -Zip
-```
-
-主なパラメーターは次のとおりです。
-
-| パラメーター | 値 | 既定値 |
-|---|---|---|
-| `-Configuration` | `Release` / `Debug` | `Release` |
-| `-Runtime` | `win-x64` / `win-x86` / `win-arm64` | `win-x64` |
-| `-Mode` | `framework-dependent` / `self-contained` / `both` | `framework-dependent` |
-| `-IncludeTools` | スイッチ | なし |
-| `-Clean` | スイッチ | なし |
-| `-Zip` | スイッチ | なし |
-
-GitHub Release を作成する場合は `release.ps1` を使用します。`gh` CLI で認証済みである必要があります。
+GitHub Release の作成は、[Releases](../../releases) ページから手動で行うか、`gh` CLI で作成してください。
 
 ```powershell
-.\release.ps1 -Mode self-contained -Clean -Draft
+gh release create v<version> <作成したzipファイルのパス> --title "v<version>" --generate-notes
 ```
 
 ## 技術スタック

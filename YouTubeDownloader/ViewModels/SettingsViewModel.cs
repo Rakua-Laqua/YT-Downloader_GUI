@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Microsoft.Win32;
+using YouTubeDownloader.Infrastructure;
 using YouTubeDownloader.Models;
 using YouTubeDownloader.Services;
 
@@ -18,6 +18,8 @@ public partial class SettingsViewModel : ViewModelBase
     private readonly ISettingsRepository _settingsRepository;
     private readonly IYtDlpClient _ytDlpClient;
     private AppSettings _settings = null!;
+    private string? _autoDetectedYtDlpPath;
+    private string? _autoDetectedFfmpegPath;
 
     public SettingsViewModel(ISettingsRepository settingsRepository, IYtDlpClient ytDlpClient)
     {
@@ -140,16 +142,13 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseYtDlpPath()
     {
-        var dialog = new OpenFileDialog
+        var path = DialogPicker.BrowseFile(
+            "yt-dlp実行ファイルを選択",
+            "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
+            "yt-dlp.exe");
+        if (path != null)
         {
-            Title = "yt-dlp実行ファイルを選択",
-            Filter = "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
-            FileName = "yt-dlp.exe"
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            YtDlpPath = dialog.FileName;
+            YtDlpPath = path;
             ValidatePaths();
         }
     }
@@ -157,16 +156,13 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseFfmpegPath()
     {
-        var dialog = new OpenFileDialog
+        var path = DialogPicker.BrowseFile(
+            "ffmpeg実行ファイルを選択",
+            "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
+            "ffmpeg.exe");
+        if (path != null)
         {
-            Title = "ffmpeg実行ファイルを選択",
-            Filter = "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
-            FileName = "ffmpeg.exe"
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            FfmpegPath = dialog.FileName;
+            FfmpegPath = path;
             ValidatePaths();
         }
     }
@@ -174,16 +170,13 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseCookieFilePath()
     {
-        var dialog = new OpenFileDialog
+        var path = DialogPicker.BrowseFile(
+            "cookies.txt を選択",
+            "cookieファイル (*.txt)|*.txt|すべてのファイル (*.*)|*.*",
+            "cookies.txt");
+        if (path != null)
         {
-            Title = "cookies.txt を選択",
-            Filter = "cookieファイル (*.txt)|*.txt|すべてのファイル (*.*)|*.*",
-            FileName = "cookies.txt"
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            CookieFilePath = dialog.FileName;
+            CookieFilePath = path;
             ValidatePaths();
         }
     }
@@ -191,15 +184,10 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void BrowseDefaultSaveFolder()
     {
-        var dialog = new OpenFolderDialog
+        var path = DialogPicker.BrowseFolder("デフォルト保存先フォルダを選択", DefaultSaveFolder);
+        if (path != null)
         {
-            Title = "デフォルト保存先フォルダを選択",
-            InitialDirectory = DefaultSaveFolder
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            DefaultSaveFolder = dialog.FolderName;
+            DefaultSaveFolder = path;
         }
     }
 
@@ -241,7 +229,7 @@ public partial class SettingsViewModel : ViewModelBase
         {
             var result = await _ytDlpClient.UpdateYtDlpAsync(channel);
             YtDlpUpdateStatus = result.Message;
-            ValidatePaths();
+            RefreshAutoDetectedPaths();
             await RefreshYtDlpVersionAsync();
 
             if (!result.IsSuccess)
@@ -289,7 +277,7 @@ public partial class SettingsViewModel : ViewModelBase
         FilenameTemplate = _settings.FilenameTemplate;
         MaxConcurrentDownloads = DownloadManager.ClampConcurrency(_settings.MaxConcurrentDownloads);
 
-        ValidatePaths();
+        RefreshAutoDetectedPaths();
         YtDlpUpdateStatus = AutoUpdateYtDlp ? "初回利用前に自動更新します。" : "自動更新は無効です。";
         UpdateFilenamePreview();
         _ = RefreshYtDlpVersionAsync();
@@ -307,26 +295,30 @@ public partial class SettingsViewModel : ViewModelBase
     private void ValidatePaths()
     {
         // 手動設定のパスが有効か確認
-        IsYtDlpValid = !string.IsNullOrEmpty(YtDlpPath) && File.Exists(YtDlpPath);
-        IsFfmpegValid = !string.IsNullOrEmpty(FfmpegPath) && File.Exists(FfmpegPath);
+        var hasManualYtDlp = !string.IsNullOrEmpty(YtDlpPath) && File.Exists(YtDlpPath);
+        var hasManualFfmpeg = !string.IsNullOrEmpty(FfmpegPath) && File.Exists(FfmpegPath);
+        var hasAutoYtDlp = !string.IsNullOrEmpty(_autoDetectedYtDlpPath) && File.Exists(_autoDetectedYtDlpPath);
+        var hasAutoFfmpeg = !string.IsNullOrEmpty(_autoDetectedFfmpegPath) && File.Exists(_autoDetectedFfmpegPath);
+
+        IsYtDlpValid = hasManualYtDlp || hasAutoYtDlp;
+        IsFfmpegValid = hasManualFfmpeg || hasAutoFfmpeg;
         UpdateCookieStatus();
-        
-        // 自動検出されたパスを表示
-        AutoDetectPaths();
     }
 
     [RelayCommand]
     private void AutoDetectPaths()
     {
+        RefreshAutoDetectedPaths();
+    }
+
+    private void RefreshAutoDetectedPaths()
+    {
         // yt-dlp自動検出（YtDlpClientと同じ探索順を使い、表示と実動作のずれを防ぐ）
         var ytDlpAuto = ExecutableLocator.FindExecutable("yt-dlp.exe", "yt-dlp");
+        _autoDetectedYtDlpPath = ytDlpAuto;
         if (!string.IsNullOrEmpty(ytDlpAuto))
         {
             YtDlpAutoDetected = $"自動検出: {ytDlpAuto}";
-            if (!IsYtDlpValid)
-            {
-                IsYtDlpValid = true; // 自動検出でも有効とする
-            }
         }
         else
         {
@@ -335,18 +327,17 @@ public partial class SettingsViewModel : ViewModelBase
         
         // ffmpeg自動検出
         var ffmpegAuto = ExecutableLocator.FindExecutable("ffmpeg.exe", "ffmpeg");
+        _autoDetectedFfmpegPath = ffmpegAuto;
         if (!string.IsNullOrEmpty(ffmpegAuto))
         {
             FfmpegAutoDetected = $"自動検出: {ffmpegAuto}";
-            if (!IsFfmpegValid)
-            {
-                IsFfmpegValid = true; // 自動検出でも有効とする
-            }
         }
         else
         {
             FfmpegAutoDetected = "自動検出: 見つかりません";
         }
+
+        ValidatePaths();
     }
 
     private bool CanUpdateYtDlp()

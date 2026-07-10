@@ -24,18 +24,17 @@ public class MetadataRepository : IMetadataRepository
 {
     private readonly string _metadataFilePath;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly ILoggingService _logger;
     // 同時ダウンロードの完了が複数ワーカースレッドから同時に保存してくるため、
     // キャッシュ(List)とファイルI/Oへのアクセスを直列化する
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private List<VideoMetadata> _cache = new();
     private bool _loaded;
 
-    public MetadataRepository()
+    public MetadataRepository(ILoggingService? logger = null)
     {
-        var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var appFolder = Path.Combine(appDataPath, "YouTubeDownloader");
-        Directory.CreateDirectory(appFolder);
-        _metadataFilePath = Path.Combine(appFolder, "metadata.json");
+        _logger = logger ?? new LoggingService();
+        _metadataFilePath = AppStorage.GetAppFilePath("metadata.json");
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -56,8 +55,10 @@ public class MetadataRepository : IMetadataRepository
                 _cache = JsonSerializer.Deserialize<List<VideoMetadata>>(json, _jsonOptions) ?? new List<VideoMetadata>();
             }
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.Error("ライブラリ履歴ファイルの読み込みに失敗しました。空の履歴として扱います。", ex);
+            AppStorage.TryCopyUnreadableFile(_metadataFilePath, "ライブラリ履歴", _logger);
             _cache = new List<VideoMetadata>();
         }
         _loaded = true;

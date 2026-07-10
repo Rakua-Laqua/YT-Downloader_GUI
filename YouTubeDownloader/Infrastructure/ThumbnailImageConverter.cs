@@ -45,6 +45,8 @@ public class ThumbnailImageConverter : IValueConverter
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
             bitmap.DecodePixelWidth = DecodePixelWidth;
             bitmap.UriSource = new Uri(url, UriKind.Absolute);
+            bitmap.DownloadFailed += (_, _) => RemoveFromCache(url, bitmap);
+            bitmap.DecodeFailed += (_, _) => RemoveFromCache(url, bitmap);
             bitmap.EndInit();
 
             // リモート画像はダウンロード中だと CanFreeze=false になるため、可能な場合のみ凍結する
@@ -83,6 +85,17 @@ public class ThumbnailImageConverter : IValueConverter
         {
             var oldestUrl = CacheOrder.Dequeue();
             Cache.Remove(oldestUrl);
+        }
+    }
+
+    private static void RemoveFromCache(string url, BitmapImage bitmap)
+    {
+        lock (SyncRoot)
+        {
+            if (Cache.TryGetValue(url, out var cached) && ReferenceEquals(cached, bitmap))
+            {
+                Cache.Remove(url);
+            }
         }
     }
 }

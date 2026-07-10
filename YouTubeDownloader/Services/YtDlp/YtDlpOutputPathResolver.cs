@@ -66,43 +66,19 @@ internal static class YtDlpOutputPathResolver
         var result = new YtDlpDownloadInfoResult();
         try
         {
-            if (File.Exists(path))
+            if (!File.Exists(path))
             {
-                foreach (var line in File.ReadAllLines(path))
+                return result;
+            }
+
+            foreach (var line in File.ReadLines(path))
+            {
+                if (!TryParseDownloadInfoLine(line, out result))
                 {
-                    var parts = line.Trim().Split('|');
-                    if (parts.Length >= 1)
-                    {
-                        var filePathVal = parts[0].Trim();
-                        if (!string.IsNullOrEmpty(filePathVal))
-                        {
-                            result.FilePath = filePathVal;
-                        }
-                    }
-
-                    // 1) timestamp(UNIX秒) を最優先
-                    if (parts.Length >= 2
-                        && long.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var epoch)
-                        && epoch > 0)
-                    {
-                        result.PublishTime = DateTimeOffset.FromUnixTimeSeconds(epoch).UtcDateTime; // Kind=Utc
-                    }
-                    // 2) upload_date(YYYYMMDD) にフォールバック
-                    else if (parts.Length >= 3)
-                    {
-                        var dateToken = parts[2].Trim();
-                        if (dateToken.Length == 8
-                            && DateTime.TryParseExact(dateToken, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate))
-                        {
-                            result.PublishTime = parsedDate; // Kind=Unspecified
-                        }
-                    }
-
-                    if (result.FilePath != null || result.PublishTime != null)
-                    {
-                        break;
-                    }
+                    continue;
                 }
+
+                break;
             }
         }
         catch
@@ -110,6 +86,49 @@ internal static class YtDlpOutputPathResolver
             // 読み取り失敗時は何も設定しない
         }
         return result;
+    }
+
+    private static bool TryParseDownloadInfoLine(string line, out YtDlpDownloadInfoResult result)
+    {
+        result = new YtDlpDownloadInfoResult();
+
+        var parts = line.Trim().Split('|');
+        if (parts.Length == 0)
+        {
+            return false;
+        }
+
+        var filePathVal = parts[0].Trim();
+        if (!string.IsNullOrEmpty(filePathVal))
+        {
+            result.FilePath = filePathVal;
+        }
+
+        result.PublishTime = TryParsePublishTime(parts);
+        return result.FilePath != null || result.PublishTime != null;
+    }
+
+    private static DateTime? TryParsePublishTime(string[] parts)
+    {
+        // 1) timestamp(UNIX秒) を最優先
+        if (parts.Length >= 2
+            && long.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var epoch)
+            && epoch > 0)
+        {
+            return DateTimeOffset.FromUnixTimeSeconds(epoch).UtcDateTime; // Kind=Utc
+        }
+
+        // 2) upload_date(YYYYMMDD) にフォールバック
+        if (parts.Length < 3)
+        {
+            return null;
+        }
+
+        var dateToken = parts[2].Trim();
+        return dateToken.Length == 8
+               && DateTime.TryParseExact(dateToken, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate)
+            ? parsedDate // Kind=Unspecified
+            : null;
     }
 
     /// <summary>

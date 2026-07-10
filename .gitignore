@@ -79,7 +79,16 @@ $RECYCLE.BIN/
 *.webm
 *.wav
 
+# Local code graph visualization
+graph-data.js
+graph-viewer.html
+
 # 認証cookie・機密情報（絶対にコミットしない）
 *cookies.txt
 cookies.txt
 *.cookies
+
+# ドキュメントとツールをGit管理から除外
+docs/
+tools/
+

@@ -23,16 +23,15 @@ public class SettingsRepository : ISettingsRepository
 {
     private readonly string _settingsFilePath;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly ILoggingService _logger;
     private readonly SemaphoreSlim _mutex = new(1, 1);
 
     public event EventHandler<AppSettings>? SettingsSaved;
 
-    public SettingsRepository()
+    public SettingsRepository(ILoggingService? logger = null)
     {
-        var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var appFolder = Path.Combine(appDataPath, "YouTubeDownloader");
-        Directory.CreateDirectory(appFolder);
-        _settingsFilePath = Path.Combine(appFolder, "settings.json");
+        _logger = logger ?? new LoggingService();
+        _settingsFilePath = AppStorage.GetAppFilePath("settings.json");
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -51,9 +50,10 @@ public class SettingsRepository : ISettingsRepository
                 return JsonSerializer.Deserialize<AppSettings>(json, _jsonOptions) ?? new AppSettings();
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // 読み込み失敗時はデフォルト設定を返す
+            _logger.Error("設定ファイルの読み込みに失敗しました。デフォルト設定で起動します。", ex);
+            AppStorage.TryCopyUnreadableFile(_settingsFilePath, "設定", _logger);
         }
         finally
         {
