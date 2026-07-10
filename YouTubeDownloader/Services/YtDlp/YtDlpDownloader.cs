@@ -450,6 +450,8 @@ internal sealed class YtDlpDownloader
 
     private sealed record ActualFormat(string? Ext, string? Vcodec, string? Acodec);
 
+    private sealed record FfprobeOutput(string StandardOutput, string StandardError);
+
     /// <summary>
     /// yt-dlpが書き出したソースフォーマット("ext|vcodec|acodec"形式)を読み取る。
     /// video:フェーズは再試行で複数行になり得るため、最後の有効行(=最終的に採用された選択)を採用する。
@@ -505,93 +507,100 @@ internal sealed class YtDlpDownloader
 
         try
         {
-            // 各ストリームを codec と type のCSVで1回だけ取得する。
-            // ffprobeは -show_entries の指定順と異なる列順で返すことがあるため、
-            // 後段のパースでは video/audio がどちらの列にあるかを見て判定する。
-            // 例:
-            //   h264,video
-            //   aac,audio
-            var psi = new ProcessStartInfo
-            {
-                FileName = ffprobePath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            psi.ArgumentList.Add("-v");
-            psi.ArgumentList.Add("error");
-            psi.ArgumentList.Add("-show_entries");
-            psi.ArgumentList.Add("stream=codec_type,codec_name");
-            psi.ArgumentList.Add("-of");
-            psi.ArgumentList.Add("csv=p=0");
-            psi.ArgumentList.Add(filePath);
-
-            using var process = Process.Start(psi);
-            if (process == null)
-            {
-                return new ActualFormat(ext, null, null);
-            }
-
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-            using var timeoutCts = new CancellationTokenSource(FfprobeTimeout);
-            try
-            {
-                await process.WaitForExitAsync(timeoutCts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                TryKillProcess(process);
-                try
-                {
-                    await process.WaitForExitAsync();
-                    await Task.WhenAll(outputTask, errorTask);
-                }
-                catch
-                {
-                    // kill後のストリーム終了待ち失敗も拡張子ベースにフォールバックする
-                }
-                return new ActualFormat(ext, null, null);
-            }
-
-            var output = await outputTask;
-            _ = await errorTask;
-
-            string? vcodec = null;
-            string? acodec = null;
-            foreach (var rawLine in output.Split('\n'))
-            {
-                var line = rawLine.Trim();
-                if (line.Length == 0)
-                {
-                    continue;
-                }
-
-                if (!TryParseFfprobeCodecLine(line, out var type, out var codec))
-                {
-                    continue;
-                }
-
-                if (type == "video" && vcodec == null)
-                {
-                    vcodec = codec;
-                }
-                else if (type == "audio" && acodec == null)
-                {
-                    acodec = codec;
-                }
-            }
-
-            return new ActualFormat(
-                ext,
-                string.IsNullOrEmpty(vcodec) ? "none" : vcodec,
-                string.IsNullOrEmpty(acodec) ? "none" : acodec);
+            var output = await RunFfprobeAsync(ffprobePath, filePath);
+            return ParseFfprobeOutput(ext, output.StandardOutput);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.Warn($"ffprobeによるフォーマット確認に失敗しました: {ex.Message}");
             return new ActualFormat(ext, null, null);
         }
+    }
+
+    private static async Task<FfprobeOutput> RunFfprobeAsync(string ffprobePath, string filePath)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = ffprobePath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("-v");
+        psi.ArgumentList.Add("error");
+        psi.ArgumentList.Add("-show_entries");
+        psi.ArgumentList.Add("stream=codec_type,codec_name");
+        psi.ArgumentList.Add("-of");
+        psi.ArgumentList.Add("csv=p=0");
+        psi.ArgumentList.Add(filePath);
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("ffprobeプロセスを開始できませんでした。");
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        using var timeoutCts = new CancellationTokenSource(FfprobeTimeout);
+
+        try
+        {
+            await process.WaitForExitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKillProcess(process);
+            try
+            {
+                await process.WaitForExitAsync(CancellationToken.None);
+                await Task.WhenAll(outputTask, errorTask);
+            }
+            catch
+            {
+                // kill後のストリーム終了待ち失敗は、タイムアウトの報告を優先する
+            }
+
+            throw new TimeoutException($"ffprobeが{FfprobeTimeout.TotalSeconds:F0}秒以内に終了しませんでした。");
+        }
+
+        await Task.WhenAll(outputTask, errorTask);
+        var standardOutput = outputTask.Result;
+        var standardError = errorTask.Result;
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"ffprobeが終了コード {process.ExitCode} を返しました。{standardError.Trim()}");
+        }
+
+        return new FfprobeOutput(standardOutput, standardError);
+    }
+
+    private static ActualFormat ParseFfprobeOutput(string ext, string output)
+    {
+        // ffprobeは -show_entries の指定順と異なる列順で返すことがあるため、
+        // video/audio がどちらの列にあるかを見て判定する。
+        string? vcodec = null;
+        string? acodec = null;
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || !TryParseFfprobeCodecLine(line, out var type, out var codec))
+            {
+                continue;
+            }
+
+            if (type == "video" && vcodec == null)
+            {
+                vcodec = codec;
+            }
+            else if (type == "audio" && acodec == null)
+            {
+                acodec = codec;
+            }
+        }
+
+        return new ActualFormat(
+            ext,
+            string.IsNullOrEmpty(vcodec) ? "none" : vcodec,
+            string.IsNullOrEmpty(acodec) ? "none" : acodec);
     }
 
     private static void TryKillProcess(Process process)

@@ -57,6 +57,7 @@ public partial class DownloadViewModel : ViewModelBase
     private string _lastVideoQuality = "best";
     private string _lastAudioQuality = "標準 (VBR 5)";
     private bool _pendingDefaultsApply;
+    private bool _suppressQueueSummaryNotifications;
     private readonly Dictionary<Guid, DownloadJobViewModel> _downloadQueueById = new();
 
     public DownloadViewModel(
@@ -84,12 +85,14 @@ public partial class DownloadViewModel : ViewModelBase
         DownloadQueue.CollectionChanged += OnDownloadQueueCollectionChanged;
 
         // ダウンロードキューを復元
+        _suppressQueueSummaryNotifications = true;
         foreach (var job in _downloadManager.GetAllJobs())
         {
             var vm = new DownloadJobViewModel(job, CancelJob, RetryJob);
             vm.UpdateFromJob();
             DownloadQueue.Add(vm);
         }
+        _suppressQueueSummaryNotifications = false;
 
         UpdateQueueSummary();
     }
@@ -323,21 +326,16 @@ public partial class DownloadViewModel : ViewModelBase
             // プレイリスト名のフォルダを作成
             var playlistFolder = Path.Combine(SaveFolderPath, SanitizeFolderName(_currentPlaylist.Title));
 
-            foreach (var item in selectedItems)
+            var jobs = selectedItems.Select(item => new DownloadJob
             {
-                var job = new DownloadJob
-                {
-                    TargetType = DownloadTargetType.PlaylistItem,
-                    VideoMetadata = item.Video,
-                    SaveFolderPath = playlistFolder,
-                    Format = SelectedFormat,
-                    Quality = SelectedQuality
-                };
+                TargetType = DownloadTargetType.PlaylistItem,
+                VideoMetadata = item.Video,
+                SaveFolderPath = playlistFolder,
+                Format = SelectedFormat,
+                Quality = SelectedQuality
+            }).ToList();
 
-                var jobVm = new DownloadJobViewModel(job, CancelJob, RetryJob);
-                DownloadQueue.Add(jobVm);
-                _downloadManager.Enqueue(job);
-            }
+            AddJobsToQueue(jobs);
         }
         else if (_currentVideo != null)
         {
@@ -351,9 +349,7 @@ public partial class DownloadViewModel : ViewModelBase
                 Quality = SelectedQuality
             };
 
-            var jobVm = new DownloadJobViewModel(job, CancelJob, RetryJob);
-            DownloadQueue.Add(jobVm);
-            _downloadManager.Enqueue(job);
+            AddJobsToQueue(new[] { job });
         }
 
         // 解析結果をリセット
@@ -474,9 +470,42 @@ public partial class DownloadViewModel : ViewModelBase
             }
         }
 
+        if (_suppressQueueSummaryNotifications)
+        {
+            return;
+        }
+
         // 新規追加/全削除などで「全件完了」の条件が変わるので、点滅済みフラグをリセット
         _hasFlashedForAllCompleted = false;
         UpdateQueueSummary();
+    }
+
+    /// <summary>
+    /// 複数ジョブの追加中はキュー集計の再計算を抑え、最後に一度だけ通知する。
+    /// CollectionChanged 自体は維持するため、ID索引と画面の項目追加は通常どおり即時反映される。
+    /// </summary>
+    private void AddJobsToQueue(IReadOnlyList<DownloadJob> jobs)
+    {
+        _suppressQueueSummaryNotifications = true;
+        try
+        {
+            foreach (var job in jobs)
+            {
+                DownloadQueue.Add(new DownloadJobViewModel(job, CancelJob, RetryJob));
+            }
+        }
+        finally
+        {
+            _suppressQueueSummaryNotifications = false;
+        }
+
+        _hasFlashedForAllCompleted = false;
+        UpdateQueueSummary();
+
+        foreach (var job in jobs)
+        {
+            _downloadManager.Enqueue(job);
+        }
     }
 
     private void UpdateQueueSummary()

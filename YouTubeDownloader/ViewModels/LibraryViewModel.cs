@@ -54,7 +54,7 @@ public partial class LibraryViewModel : ViewModelBase
     private string _searchQuery = string.Empty;
 
     // 検索ボックスへの入力ごとにライブ検索を実行する（デバウンス付き）
-    partial void OnSearchQueryChanged(string value) => DebounceSearch();
+    partial void OnSearchQueryChanged(string value) => _ = DebounceSearchAsync();
 
     [ObservableProperty]
     private VideoMetadataViewModel? _selectedItem;
@@ -288,7 +288,7 @@ public partial class LibraryViewModel : ViewModelBase
 
     #region ライブ検索
 
-    private async void DebounceSearch()
+    private async Task DebounceSearchAsync()
     {
         // 直前の待機をキャンセルし、最新の入力だけを実行対象にする
         _searchDebounceCts?.Cancel();
@@ -305,6 +305,11 @@ public partial class LibraryViewModel : ViewModelBase
         catch (OperationCanceledException)
         {
             // 入力が続いている間はキャンセルされる（正常）
+        }
+        catch (Exception ex)
+        {
+            // プロパティ変更から起動されるため、例外をUI同期コンテキストへ逸脱させない。
+            Trace.TraceError($"ライブ検索に失敗しました: {ex}");
         }
     }
 

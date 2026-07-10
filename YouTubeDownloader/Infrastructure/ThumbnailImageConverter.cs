@@ -34,6 +34,7 @@ public class ThumbnailImageConverter : IValueConverter
         {
             if (Cache.TryGetValue(url, out var cached))
             {
+                TouchCacheEntry(url);
                 return cached;
             }
         }
@@ -60,6 +61,7 @@ public class ThumbnailImageConverter : IValueConverter
             {
                 if (Cache.TryGetValue(url, out var cached))
                 {
+                    TouchCacheEntry(url);
                     return cached;
                 }
 
@@ -88,6 +90,15 @@ public class ThumbnailImageConverter : IValueConverter
             CacheOrder.RemoveFirst();
             CacheOrderNodes.Remove(oldestUrl);
             Cache.Remove(oldestUrl);
+        }
+    }
+
+    private static void TouchCacheEntry(string url)
+    {
+        if (CacheOrderNodes.TryGetValue(url, out var node))
+        {
+            CacheOrder.Remove(node);
+            CacheOrder.AddLast(node);
         }
     }
 
