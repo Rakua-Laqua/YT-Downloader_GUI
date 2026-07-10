@@ -42,48 +42,48 @@ internal static class YtDlpDownloadRunner
         // 変換進捗ポーラーのキャンセル制御（ExtractAudio開始時に起動する）
         using var conversionPollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var outputProcessor = new DownloadOutputProcessor(progress, conversionProgressFile, durationSeconds, conversionPollCts.Token);
-
-        // 出力を読み取りながら進捗を報告
-        var outputTask = Task.Run(async () =>
-        {
-            while (true)
-            {
-                var line = await process.StandardOutput.ReadLineAsync(cancellationToken);
-                if (line == null)
-                {
-                    break;
-                }
-
-                outputProcessor.ProcessLine(line);
-            }
-        });
+        var processExited = false;
 
         var errorOutput = new StringBuilder();
-        var errorTask = Task.Run(async () =>
-        {
-            while (true)
-            {
-                var line = await process.StandardError.ReadLineAsync(cancellationToken);
-                if (line == null)
-                {
-                    break;
-                }
-
-                AppendLimitedLine(errorOutput, line, MaxStdErrChars);
-            }
-        });
 
         try
         {
+            // ストリーム読み取りは非同期I/Oなので、Task.Run で別スレッドへ逃がす必要はない。
+            var outputTask = ReadStandardOutputAsync(process.StandardOutput, outputProcessor, cancellationToken);
+            var errorTask = ReadStandardErrorAsync(process.StandardError, errorOutput, cancellationToken);
             await Task.WhenAll(outputTask, errorTask);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            YtDlpProcessRunner.KillProcessTree(process);
-            throw;
+
+            await process.WaitForExitAsync(CancellationToken.None);
+            processExited = true;
+            stopwatch.Stop();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return new YtDlpRunResult
+            {
+                ExitCode = process.ExitCode,
+                StdErr = errorOutput.ToString(),
+                StdOutSummary = outputProcessor.StdOutSummary,
+                StdOutDiagnostics = outputProcessor.StdOutDiagnostics,
+                LastPhase = outputProcessor.LastPhase,
+                Elapsed = stopwatch.Elapsed
+            };
         }
         finally
         {
+            // 読み取り失敗・キャンセル・待機失敗でも、子プロセスを残さず終了させる。
+            if (!processExited)
+            {
+                YtDlpProcessRunner.KillProcessTree(process);
+                try
+                {
+                    await process.WaitForExitAsync(CancellationToken.None);
+                }
+                catch
+                {
+                    // プロセス開始直後の失敗など、後始末の例外は元の例外を優先する
+                }
+            }
+
             // 変換ポーラーを停止して終了を待つ
             conversionPollCts.Cancel();
             if (outputProcessor.ConversionPollTask != null)
@@ -98,20 +98,28 @@ internal static class YtDlpDownloadRunner
                 }
             }
         }
+    }
 
-        await process.WaitForExitAsync(CancellationToken.None);
-        stopwatch.Stop();
-        cancellationToken.ThrowIfCancellationRequested();
-
-        return new YtDlpRunResult
+    private static async Task ReadStandardOutputAsync(
+        StreamReader reader,
+        DownloadOutputProcessor outputProcessor,
+        CancellationToken cancellationToken)
+    {
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
-            ExitCode = process.ExitCode,
-            StdErr = errorOutput.ToString(),
-            StdOutSummary = outputProcessor.StdOutSummary,
-            StdOutDiagnostics = outputProcessor.StdOutDiagnostics,
-            LastPhase = outputProcessor.LastPhase,
-            Elapsed = stopwatch.Elapsed
-        };
+            outputProcessor.ProcessLine(line);
+        }
+    }
+
+    private static async Task ReadStandardErrorAsync(
+        StreamReader reader,
+        StringBuilder errorOutput,
+        CancellationToken cancellationToken)
+    {
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            AppendLimitedLine(errorOutput, line, MaxStdErrChars);
+        }
     }
 
     private sealed class DownloadOutputProcessor

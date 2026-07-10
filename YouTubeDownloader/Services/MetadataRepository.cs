@@ -29,6 +29,7 @@ public class MetadataRepository : IMetadataRepository
     // キャッシュ(List)とファイルI/Oへのアクセスを直列化する
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private List<VideoMetadata> _cache = new();
+    private IReadOnlyList<VideoMetadata> _orderedCache = Array.Empty<VideoMetadata>();
     private bool _loaded;
 
     public MetadataRepository(ILoggingService? logger = null)
@@ -61,7 +62,16 @@ public class MetadataRepository : IMetadataRepository
             AppStorage.TryCopyUnreadableFile(_metadataFilePath, "ライブラリ履歴", _logger);
             _cache = new List<VideoMetadata>();
         }
+        RebuildOrderedCache();
         _loaded = true;
+    }
+
+    // _mutex 保持中に呼び出す。検索ではこの不変スナップショットをロック外で読む。
+    private void RebuildOrderedCache()
+    {
+        _orderedCache = _cache
+            .OrderByDescending(v => v.DownloadedAt)
+            .ToList();
     }
 
     private async Task SaveAsync()
@@ -87,6 +97,7 @@ public class MetadataRepository : IMetadataRepository
                 _cache.Add(metadata);
             }
 
+            RebuildOrderedCache();
             await SaveAsync();
         }
         finally
@@ -97,25 +108,27 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<IEnumerable<VideoMetadata>> FindVideosAsync(string? searchQuery = null)
     {
+        IReadOnlyList<VideoMetadata> orderedVideos;
         await _mutex.WaitAsync();
         try
         {
             await LoadIfNeededAsync();
-
-            IEnumerable<VideoMetadata> videos = _cache;
-            if (!string.IsNullOrWhiteSpace(searchQuery))
-            {
-                videos = videos.Where(v =>
-                    v.Title.Contains(searchQuery, StringComparison.OrdinalIgnoreCase) ||
-                    v.Channel.Contains(searchQuery, StringComparison.OrdinalIgnoreCase));
-            }
-
-            return videos.OrderByDescending(v => v.DownloadedAt).ToList();
+            orderedVideos = _orderedCache;
         }
         finally
         {
             _mutex.Release();
         }
+
+        // ライブ検索の全件走査はロック外で行う。並び替えは更新時に済ませている。
+        if (string.IsNullOrWhiteSpace(searchQuery))
+        {
+            return orderedVideos.ToList();
+        }
+
+        return orderedVideos.Where(v =>
+            v.Title.Contains(searchQuery, StringComparison.OrdinalIgnoreCase) ||
+            v.Channel.Contains(searchQuery, StringComparison.OrdinalIgnoreCase)).ToList();
     }
 
     public async Task DeleteVideoMetadataAsync(string videoId)
@@ -124,8 +137,11 @@ public class MetadataRepository : IMetadataRepository
         try
         {
             await LoadIfNeededAsync();
-            _cache.RemoveAll(v => v.Id == videoId);
-            await SaveAsync();
+            if (_cache.RemoveAll(v => v.Id == videoId) > 0)
+            {
+                RebuildOrderedCache();
+                await SaveAsync();
+            }
         }
         finally
         {
@@ -149,6 +165,7 @@ public class MetadataRepository : IMetadataRepository
             var removed = _cache.RemoveAll(v => idSet.Contains(v.Id));
             if (removed > 0)
             {
+                RebuildOrderedCache();
                 await SaveAsync();
             }
         }
