@@ -57,5 +57,19 @@ public partial class App : Application
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
     }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        try
+        {
+            // DI コンテナを破棄して DownloadManager.Dispose を呼び、実行中の
+            // yt-dlp プロセスへ渡したキャンセルトークンを停止させる。
+            (_serviceProvider as IDisposable)?.Dispose();
+        }
+        finally
+        {
+            base.OnExit(e);
+        }
+    }
 }
 

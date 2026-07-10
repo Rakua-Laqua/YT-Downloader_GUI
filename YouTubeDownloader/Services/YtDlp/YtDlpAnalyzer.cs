@@ -100,6 +100,10 @@ internal sealed class YtDlpAnalyzer
                 ErrorMessage = $"動画情報を取得できませんでした。\n{reason}"
             };
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             return new YtDlpAnalyzeResult

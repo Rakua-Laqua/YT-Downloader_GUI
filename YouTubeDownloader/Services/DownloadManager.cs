@@ -379,7 +379,6 @@ public class DownloadManager : IDownloadManager, IDisposable
             foreach (var cts in _cancellationTokens.Values)
             {
                 cts.Cancel();
-                cts.Dispose();
             }
             _cancellationTokens.Clear();
             while (_slotWaiters.Count > 0)

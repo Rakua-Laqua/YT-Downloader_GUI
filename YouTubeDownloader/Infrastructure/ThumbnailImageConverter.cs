@@ -19,7 +19,8 @@ public class ThumbnailImageConverter : IValueConverter
     private const int MaxCacheEntries = 256;
 
     private static readonly Dictionary<string, BitmapImage> Cache = new();
-    private static readonly Queue<string> CacheOrder = new();
+    private static readonly LinkedList<string> CacheOrder = new();
+    private static readonly Dictionary<string, LinkedListNode<string>> CacheOrderNodes = new();
     private static readonly object SyncRoot = new();
 
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -63,7 +64,7 @@ public class ThumbnailImageConverter : IValueConverter
                 }
 
                 Cache[url] = bitmap;
-                CacheOrder.Enqueue(url);
+                CacheOrderNodes[url] = CacheOrder.AddLast(url);
                 TrimCache();
             }
 
@@ -81,9 +82,11 @@ public class ThumbnailImageConverter : IValueConverter
 
     private static void TrimCache()
     {
-        while (Cache.Count > MaxCacheEntries && CacheOrder.Count > 0)
+        while (Cache.Count > MaxCacheEntries && CacheOrder.First != null)
         {
-            var oldestUrl = CacheOrder.Dequeue();
+            var oldestUrl = CacheOrder.First.Value;
+            CacheOrder.RemoveFirst();
+            CacheOrderNodes.Remove(oldestUrl);
             Cache.Remove(oldestUrl);
         }
     }
@@ -95,6 +98,10 @@ public class ThumbnailImageConverter : IValueConverter
             if (Cache.TryGetValue(url, out var cached) && ReferenceEquals(cached, bitmap))
             {
                 Cache.Remove(url);
+                if (CacheOrderNodes.Remove(url, out var node))
+                {
+                    CacheOrder.Remove(node);
+                }
             }
         }
     }

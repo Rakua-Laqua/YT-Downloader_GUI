@@ -25,6 +25,9 @@ public class SettingsRepository : ISettingsRepository
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILoggingService _logger;
     private readonly SemaphoreSlim _mutex = new(1, 1);
+    // 呼び出し側が設定オブジェクトを変更してもキャッシュが書き換わらないよう、
+    // 読み出し・保存・通知の境界では常にコピーを渡す。
+    private AppSettings? _cachedSettings;
 
     public event EventHandler<AppSettings>? SettingsSaved;
 
@@ -44,38 +47,72 @@ public class SettingsRepository : ISettingsRepository
         _mutex.Wait();
         try
         {
+            if (_cachedSettings != null)
+            {
+                return CloneSettings(_cachedSettings);
+            }
+
+            AppSettings settings = new();
             if (File.Exists(_settingsFilePath))
             {
                 var json = File.ReadAllText(_settingsFilePath);
-                return JsonSerializer.Deserialize<AppSettings>(json, _jsonOptions) ?? new AppSettings();
+                settings = JsonSerializer.Deserialize<AppSettings>(json, _jsonOptions) ?? new AppSettings();
             }
+
+            _cachedSettings = CloneSettings(settings);
+            return settings;
         }
         catch (Exception ex)
         {
             _logger.Error("設定ファイルの読み込みに失敗しました。デフォルト設定で起動します。", ex);
             AppStorage.TryCopyUnreadableFile(_settingsFilePath, "設定", _logger);
+            _cachedSettings = new AppSettings();
+            return CloneSettings(_cachedSettings);
         }
         finally
         {
             _mutex.Release();
         }
-
-        return new AppSettings();
     }
 
     public async Task SaveAsync(AppSettings settings)
     {
-        var json = JsonSerializer.Serialize(settings, _jsonOptions);
+        var snapshot = CloneSettings(settings);
+        var json = JsonSerializer.Serialize(snapshot, _jsonOptions);
         await _mutex.WaitAsync();
         try
         {
             await AtomicFileWriter.WriteAllTextAsync(_settingsFilePath, json);
+            _cachedSettings = CloneSettings(snapshot);
         }
         finally
         {
             _mutex.Release();
         }
 
-        SettingsSaved?.Invoke(this, settings);
+        SettingsSaved?.Invoke(this, CloneSettings(snapshot));
+    }
+
+    private static AppSettings CloneSettings(AppSettings source)
+    {
+        return new AppSettings
+        {
+            YtDlpPath = source.YtDlpPath,
+            FfmpegPath = source.FfmpegPath,
+            CookieFilePath = source.CookieFilePath,
+            AutoUpdateYtDlp = source.AutoUpdateYtDlp,
+            YtDlpUpdateChannel = source.YtDlpUpdateChannel,
+            DefaultMetadataLanguage = source.DefaultMetadataLanguage,
+            DefaultSaveFolder = source.DefaultSaveFolder,
+            DefaultVideoFormat = source.DefaultVideoFormat,
+            DefaultAudioFormat = source.DefaultAudioFormat,
+            DefaultQuality = source.DefaultQuality,
+            DefaultAudioQuality = source.DefaultAudioQuality,
+            PreferHighEfficiencyCodecs = source.PreferHighEfficiencyCodecs,
+            SetFileDateToPublishDate = source.SetFileDateToPublishDate,
+            FixMetadataYear = source.FixMetadataYear,
+            FilenameTemplate = source.FilenameTemplate,
+            MaxConcurrentDownloads = source.MaxConcurrentDownloads
+        };
     }
 }
