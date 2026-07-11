@@ -53,6 +53,7 @@ public partial class DownloadJobViewModel : ObservableObject
             ? $"{StatusMessage} ({Progress}%)"
             : $"ダウンロード中 ({Progress}%)",
         DownloadStatus.Completed => "完了",
+        DownloadStatus.CompletedWithWarning => $"完了（警告）: {ErrorMessage}",
         DownloadStatus.Failed => $"失敗: {ErrorMessage ?? "不明なエラー"}",
         DownloadStatus.Canceled => "キャンセル",
         _ => ""
@@ -62,13 +63,13 @@ public partial class DownloadJobViewModel : ObservableObject
     public bool CanRetry => Status == DownloadStatus.Failed || Status == DownloadStatus.Canceled;
 
     /// <summary>フォーマット不一致警告があるか（完了時のみ表示対象）</summary>
-    public bool HasFormatMismatch => Status == DownloadStatus.Completed && _job.HasFormatMismatch;
+    public bool HasFormatMismatch => IsCompleted(Status) && _job.HasFormatMismatch;
 
     /// <summary>フォーマット検証のツールチップ（不一致警告／音声変換情報）</summary>
     public string? FormatMismatchTooltip => _job.FormatMismatchTooltip;
 
     /// <summary>完了時にダウンロード情報を表示できるか</summary>
-    public bool HasCompletionInfo => Status == DownloadStatus.Completed;
+    public bool HasCompletionInfo => IsCompleted(Status);
 
     /// <summary>完了時の情報ツールチップ（所要時間・保存先・フォーマット検証など）</summary>
     public string? CompletionInfoTooltip => HasCompletionInfo ? BuildCompletionInfoTooltip() : null;
@@ -126,6 +127,9 @@ public partial class DownloadJobViewModel : ObservableObject
         OnPropertyChanged(nameof(HasCompletionInfo));
         OnPropertyChanged(nameof(CompletionInfoTooltip));
     }
+
+    private static bool IsCompleted(DownloadStatus status) =>
+        status is DownloadStatus.Completed or DownloadStatus.CompletedWithWarning;
 
     private string BuildCompletionInfoTooltip()
     {

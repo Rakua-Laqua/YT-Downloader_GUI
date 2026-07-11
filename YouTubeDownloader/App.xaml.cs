@@ -54,6 +54,9 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        YtDlpCookieProtector.CleanupStaleCopies(
+            _serviceProvider.GetRequiredService<ILoggingService>());
+
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
     }

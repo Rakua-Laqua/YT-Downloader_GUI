@@ -23,7 +23,7 @@ public class YtDlpClient : IYtDlpClient
     {
         _settingsRepository = settingsRepository;
         _updater = new YtDlpUpdater(settingsRepository, logger, GetYtDlpPath);
-        _analyzer = new YtDlpAnalyzer(settingsRepository, _updater, GetYtDlpPath);
+        _analyzer = new YtDlpAnalyzer(settingsRepository, _updater, GetYtDlpPath, logger);
         _downloader = new YtDlpDownloader(settingsRepository, logger, _updater, GetYtDlpPath, GetFfmpegPath);
     }
 

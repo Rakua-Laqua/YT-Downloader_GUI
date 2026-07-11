@@ -13,6 +13,30 @@ namespace YouTubeDownloader.Services;
 /// </summary>
 internal static class YtDlpCookieProtector
 {
+    private const string CookieFilePattern = "ytdlp_cookies_*.txt";
+
+    private static string TempDirectory =>
+        Path.Combine(Path.GetDirectoryName(AppStorage.GetAppFilePath("temp.marker"))!, "Temp");
+
+    public static void CleanupStaleCopies(ILoggingService? logger = null)
+    {
+        if (!Directory.Exists(TempDirectory))
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(TempDirectory, CookieFilePattern))
+            {
+                TryDelete(path, logger);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger?.Warn($"cookie一時ファイルのクリーンアップに失敗しました: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
     /// <summary>
     /// 引数内の "--cookies &lt;path&gt;" を一時コピーへ差し替えたスコープを返す。
     /// using で受け、Dispose（=プロセス終了後）に一時ファイルを削除する。
@@ -36,10 +60,11 @@ internal static class YtDlpCookieProtector
 
         try
         {
-            var tempPath = Path.Combine(Path.GetTempPath(), $"ytdlp_cookies_{Guid.NewGuid():N}.txt");
+            Directory.CreateDirectory(TempDirectory);
+            var tempPath = Path.Combine(TempDirectory, $"ytdlp_cookies_{Guid.NewGuid():N}.txt");
             File.Copy(masterPath, tempPath, overwrite: true);
             args[index + 1] = tempPath;
-            return new CookieCopyScope(args, tempPath);
+            return new CookieCopyScope(args, tempPath, logger);
         }
         catch (Exception ex)
         {
@@ -49,7 +74,22 @@ internal static class YtDlpCookieProtector
             args.RemoveAt(index + 1);
             args.RemoveAt(index);
             logger?.Warn($"cookieファイルの一時コピー作成に失敗しました。cookieなしで実行します: {ex.GetType().Name}: {ex.Message}");
-            return new CookieCopyScope(args, null);
+            return new CookieCopyScope(args, null, logger);
+        }
+    }
+
+    private static void TryDelete(string path, ILoggingService? logger)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger?.Warn($"cookie一時ファイルを削除できませんでした: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -59,11 +99,13 @@ internal static class YtDlpCookieProtector
         public List<string> Arguments { get; }
 
         private readonly string? _tempFile;
+        private readonly ILoggingService? _logger;
 
-        public CookieCopyScope(List<string> arguments, string? tempFile)
+        public CookieCopyScope(List<string> arguments, string? tempFile, ILoggingService? logger = null)
         {
             Arguments = arguments;
             _tempFile = tempFile;
+            _logger = logger;
         }
 
         public void Dispose()
@@ -73,17 +115,7 @@ internal static class YtDlpCookieProtector
                 return;
             }
 
-            try
-            {
-                if (File.Exists(_tempFile))
-                {
-                    File.Delete(_tempFile);
-                }
-            }
-            catch
-            {
-                // 一時ファイルの削除失敗は無視（次回起動時のTempクリーンアップに任せる）
-            }
+            TryDelete(_tempFile, _logger);
         }
     }
 }

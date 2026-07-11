@@ -10,6 +10,7 @@ public enum DownloadStatus
     Pending,
     Running,
     Completed,
+    CompletedWithWarning,
     Failed,
     Canceled
 }

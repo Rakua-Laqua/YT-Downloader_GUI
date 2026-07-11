@@ -73,14 +73,12 @@ internal static class YtDlpDownloadRunner
             // 読み取り失敗・キャンセル・待機失敗でも、子プロセスを残さず終了させる。
             if (!processExited)
             {
-                YtDlpProcessRunner.KillProcessTree(process);
-                try
+                var terminated = await YtDlpProcessRunner.TryTerminateProcessTreeAsync(
+                    process,
+                    YtDlpProcessRunner.ProcessCleanupTimeout);
+                if (!terminated)
                 {
-                    await process.WaitForExitAsync(CancellationToken.None);
-                }
-                catch
-                {
-                    // プロセス開始直後の失敗など、後始末の例外は元の例外を優先する
+                    logger?.Warn("yt-dlpプロセスを後処理時間内に終了できませんでした。");
                 }
             }
 

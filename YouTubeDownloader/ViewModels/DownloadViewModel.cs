@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -59,6 +60,7 @@ public partial class DownloadViewModel : ViewModelBase
     private bool _pendingDefaultsApply;
     private bool _suppressQueueSummaryNotifications;
     private readonly Dictionary<Guid, DownloadJobViewModel> _downloadQueueById = new();
+    private CancellationTokenSource? _analysisCts;
 
     public DownloadViewModel(
         IYtDlpClient ytDlpClient,
@@ -101,6 +103,11 @@ public partial class DownloadViewModel : ViewModelBase
 
     [ObservableProperty]
     private string _inputUrl = string.Empty;
+
+    partial void OnInputUrlChanged(string value)
+    {
+        _analysisCts?.Cancel();
+    }
 
     [ObservableProperty]
     private string _saveFolderPath = string.Empty;
@@ -153,7 +160,8 @@ public partial class DownloadViewModel : ViewModelBase
     public ObservableCollection<PlaylistItemViewModel> PlaylistItems { get; } = new();
 
     public int DownloadQueueTotal => DownloadQueue.Count;
-    public int DownloadQueueCompleted => DownloadQueue.Count(j => j.Status == DownloadStatus.Completed);
+    public int DownloadQueueCompleted => DownloadQueue.Count(j =>
+        j.Status is DownloadStatus.Completed or DownloadStatus.CompletedWithWarning);
     public string DownloadQueueSummaryText => $"{DownloadQueueCompleted}/{DownloadQueueTotal}";
 
     public string[] VideoFormats { get; } = { "mp4", "mkv", "webm" };
@@ -209,6 +217,12 @@ public partial class DownloadViewModel : ViewModelBase
             return;
         }
 
+        var analysisInput = InputUrl.Trim();
+        _analysisCts?.Cancel();
+        _analysisCts?.Dispose();
+        var analysisCts = new CancellationTokenSource();
+        _analysisCts = analysisCts;
+
         IsAnalyzing = true;
         HasAnalyzedResult = false;
         IsPlaylistTruncated = false;
@@ -219,7 +233,12 @@ public partial class DownloadViewModel : ViewModelBase
 
         try
         {
-            var result = await _ytDlpClient.AnalyzeUrlAsync(InputUrl);
+            var result = await _ytDlpClient.AnalyzeUrlAsync(analysisInput, analysisCts.Token);
+
+            if (analysisCts.IsCancellationRequested || !string.Equals(analysisInput, InputUrl.Trim(), StringComparison.Ordinal))
+            {
+                return;
+            }
 
             if (!result.IsSuccess)
             {
@@ -268,13 +287,22 @@ public partial class DownloadViewModel : ViewModelBase
 
             HasAnalyzedResult = true;
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (analysisCts.IsCancellationRequested)
         {
-            MessageBox.Show($"解析エラー: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+            // 入力変更により古くなった解析結果は表示しない。
+        }
+        catch (Exception)
+        {
+            MessageBox.Show("解析中に予期しないエラーが発生しました。ログを確認してください。", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
-            IsAnalyzing = false;
+            if (ReferenceEquals(_analysisCts, analysisCts))
+            {
+                _analysisCts = null;
+                IsAnalyzing = false;
+            }
+            analysisCts.Dispose();
         }
     }
 
@@ -414,7 +442,7 @@ public partial class DownloadViewModel : ViewModelBase
     private void ClearCompletedJobs()
     {
         var completedJobs = DownloadQueue
-            .Where(j => j.Status == DownloadStatus.Completed || j.Status == DownloadStatus.Canceled)
+            .Where(j => j.Status is DownloadStatus.Completed or DownloadStatus.CompletedWithWarning or DownloadStatus.Canceled)
             .ToList();
 
         foreach (var job in completedJobs)
@@ -548,8 +576,9 @@ public partial class DownloadViewModel : ViewModelBase
             return;
         }
 
-        // 「全てのダウンロードが完了」= キュー内がすべて Completed
-        var allCompleted = DownloadQueue.All(j => j.Status == DownloadStatus.Completed);
+        // 警告付き完了もダウンロード自体は完了している。
+        var allCompleted = DownloadQueue.All(j =>
+            j.Status is DownloadStatus.Completed or DownloadStatus.CompletedWithWarning);
         if (!allCompleted)
         {
             _hasFlashedForAllCompleted = false;

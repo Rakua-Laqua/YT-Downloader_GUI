@@ -10,6 +10,7 @@ namespace YouTubeDownloader.Services;
 
 internal static class YtDlpProcessRunner
 {
+    internal static readonly TimeSpan ProcessCleanupTimeout = TimeSpan.FromSeconds(3);
     /// <summary>
     /// yt-dlpの標準エラー出力をデコードするエンコーディング。
     /// yt-dlpはリダイレクト時、出力をシステムのANSIコードページ（日本語ならcp932）で書き出すため、
@@ -45,10 +46,19 @@ internal static class YtDlpProcessRunner
         var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-        await Task.WhenAll(outputTask, errorTask);
-        await process.WaitForExitAsync(cancellationToken);
-
-        return (outputTask.Result, errorTask.Result, process.ExitCode);
+        try
+        {
+            await Task.WhenAll(outputTask, errorTask);
+            await process.WaitForExitAsync(cancellationToken);
+            return (outputTask.Result, errorTask.Result, process.ExitCode);
+        }
+        finally
+        {
+            if (!HasExited(process))
+            {
+                await TryTerminateProcessTreeAsync(process, ProcessCleanupTimeout);
+            }
+        }
     }
 
     internal static ProcessStartInfo CreateStartInfo(string ytDlpPath, IEnumerable<string> arguments)
@@ -96,7 +106,7 @@ internal static class YtDlpProcessRunner
         return Encoding.UTF8;
     }
 
-    internal static void KillProcessTree(Process process)
+    internal static bool KillProcessTree(Process process)
     {
         try
         {
@@ -104,10 +114,43 @@ internal static class YtDlpProcessRunner
             {
                 process.Kill(entireProcessTree: true);
             }
+            return true;
         }
         catch
         {
-            // The process may already be gone.
+            return HasExited(process);
+        }
+    }
+
+    internal static async Task<bool> TryTerminateProcessTreeAsync(Process process, TimeSpan timeout)
+    {
+        KillProcessTree(process);
+        if (HasExited(process))
+        {
+            return true;
+        }
+
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        try
+        {
+            await process.WaitForExitAsync(timeoutCts.Token);
+            return true;
+        }
+        catch
+        {
+            return HasExited(process);
+        }
+    }
+
+    private static bool HasExited(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch
+        {
+            return true;
         }
     }
 }

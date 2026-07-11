@@ -11,12 +11,18 @@ internal sealed class YtDlpAnalyzer
     private readonly ISettingsRepository _settingsRepository;
     private readonly YtDlpUpdater _updater;
     private readonly Func<string> _getYtDlpPath;
+    private readonly ILoggingService _logger;
 
-    public YtDlpAnalyzer(ISettingsRepository settingsRepository, YtDlpUpdater updater, Func<string> getYtDlpPath)
+    public YtDlpAnalyzer(
+        ISettingsRepository settingsRepository,
+        YtDlpUpdater updater,
+        Func<string> getYtDlpPath,
+        ILoggingService logger)
     {
         _settingsRepository = settingsRepository;
         _updater = updater;
         _getYtDlpPath = getYtDlpPath;
+        _logger = logger;
     }
 
     public async Task<YtDlpAnalyzeResult> AnalyzeUrlAsync(string url, CancellationToken cancellationToken = default)
@@ -106,10 +112,11 @@ internal sealed class YtDlpAnalyzer
         }
         catch (Exception ex)
         {
+            _logger.Error($"URL解析中に内部エラーが発生しました: {YtDlpFailureFormatter.RedactUrlForLog(url)}", ex);
             return new YtDlpAnalyzeResult
             {
                 IsSuccess = false,
-                ErrorMessage = ex.Message
+                ErrorMessage = "動画情報の解析中にエラーが発生しました。詳細はログを確認してください。"
             };
         }
     }

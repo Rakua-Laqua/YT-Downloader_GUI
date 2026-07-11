@@ -11,6 +11,17 @@ namespace YouTubeDownloader.Services;
 
 internal sealed class YtDlpDownloader
 {
+    private sealed record DownloadExecutionContext(
+        DownloadJob Job,
+        string JobLabel,
+        string YtDlpPath,
+        List<string> Arguments,
+        AppSettings Settings,
+        IProgress<ProgressInfo>? Progress,
+        string? ConversionProgressFile,
+        int DurationSeconds,
+        CancellationToken CancellationToken);
+
     private readonly ISettingsRepository _settingsRepository;
     private readonly ILoggingService _logger;
     private readonly YtDlpUpdater _updater;
@@ -74,7 +85,7 @@ internal sealed class YtDlpDownloader
         var firstRunFailed = false;
         try
         {
-            firstRunFailed = await RunDownloadWithFallbackAsync(
+            var executionContext = new DownloadExecutionContext(
                 job,
                 jobLabel,
                 ytDlpPath,
@@ -83,7 +94,8 @@ internal sealed class YtDlpDownloader
                 progress,
                 conversionProgressFile,
                 durationSeconds,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken);
+            firstRunFailed = await RunDownloadWithFallbackAsync(executionContext).ConfigureAwait(false);
 
             var infoResult = YtDlpOutputPathResolver.ReadDownloadInfoFile(downloadInfoFile);
             ApplyDownloadedFileInfo(job, settings, outputPath, requestedFormat, infoResult);
@@ -178,17 +190,11 @@ internal sealed class YtDlpDownloader
         return new YtDlpDownloadException(reason, detail, innerException: exception);
     }
 
-    private async Task<bool> RunDownloadWithFallbackAsync(
-        DownloadJob job,
-        string jobLabel,
-        string ytDlpPath,
-        List<string> arguments,
-        AppSettings settings,
-        IProgress<ProgressInfo>? progress,
-        string? conversionProgressFile,
-        int durationSeconds,
-        CancellationToken cancellationToken)
+    private async Task<bool> RunDownloadWithFallbackAsync(DownloadExecutionContext context)
     {
+        var (job, jobLabel, ytDlpPath, arguments, settings, progress,
+            conversionProgressFile, durationSeconds, cancellationToken) = context;
+
         _logger.Info($"yt-dlp 実行 {jobLabel}: {ytDlpPath} {YtDlpFailureFormatter.FormatArgumentsForLog(arguments)}");
         var firstRun = await YtDlpDownloadRunner.RunDownloadProcessAsync(ytDlpPath, arguments, progress, conversionProgressFile, durationSeconds, cancellationToken, _logger).ConfigureAwait(false);
         LogRunSummary(jobLabel, "yt-dlp 初回出力要約", firstRun);
@@ -563,11 +569,13 @@ internal sealed class YtDlpFormatInspector
         }
         catch (OperationCanceledException)
         {
-            TryKillProcess(process);
+            await YtDlpProcessRunner.TryTerminateProcessTreeAsync(
+                process,
+                YtDlpProcessRunner.ProcessCleanupTimeout);
             try
             {
-                await process.WaitForExitAsync(CancellationToken.None);
-                await Task.WhenAll(outputTask, errorTask);
+                await Task.WhenAll(outputTask, errorTask)
+                    .WaitAsync(YtDlpProcessRunner.ProcessCleanupTimeout);
             }
             catch
             {
@@ -617,21 +625,6 @@ internal sealed class YtDlpFormatInspector
             ext,
             string.IsNullOrEmpty(vcodec) ? "none" : vcodec,
             string.IsNullOrEmpty(acodec) ? "none" : acodec);
-    }
-
-    private static void TryKillProcess(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // ffprobe失敗時は拡張子ベースにフォールバックする
-        }
     }
 
     private static bool TryParseFfprobeCodecLine(string line, out string type, out string codec)

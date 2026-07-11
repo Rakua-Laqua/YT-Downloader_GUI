@@ -8,9 +8,36 @@ namespace YouTubeDownloader.Services;
 
 internal static class YtDlpFailureFormatter
 {
+    private static readonly HashSet<string> SensitiveValueOptions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "--cookies",
+        "--cookies-from-browser",
+        "--username",
+        "--password",
+        "--video-password",
+        "--netrc-location"
+    };
+
     public static string FormatArgumentsForLog(IEnumerable<string> arguments)
     {
-        return string.Join(" ", arguments.Select(QuoteArgumentForLog));
+        var values = arguments.ToList();
+        var displayValues = new List<string>(values.Count);
+        for (var index = 0; index < values.Count; index++)
+        {
+            var value = values[index];
+            displayValues.Add(QuoteArgumentForLog(value));
+            if (SensitiveValueOptions.Contains(value) && index + 1 < values.Count)
+            {
+                displayValues.Add("[REDACTED]");
+                index++;
+            }
+            else if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+            {
+                displayValues[^1] = QuoteArgumentForLog(RedactUrlForLog(uri));
+            }
+        }
+
+        return string.Join(" ", displayValues);
     }
 
     /// <summary>
@@ -113,7 +140,9 @@ internal static class YtDlpFailureFormatter
     public static string BuildJobLabel(DownloadJob job)
     {
         var title = string.IsNullOrWhiteSpace(job.VideoMetadata.Title) ? "(無題)" : job.VideoMetadata.Title;
-        var url = string.IsNullOrWhiteSpace(job.VideoMetadata.Url) ? "(URL未設定)" : job.VideoMetadata.Url;
+        var url = string.IsNullOrWhiteSpace(job.VideoMetadata.Url)
+            ? "(URL未設定)"
+            : RedactUrlForLog(job.VideoMetadata.Url);
         return $"[{title}] <{url}>";
     }
 
@@ -241,12 +270,30 @@ internal static class YtDlpFailureFormatter
             : argument;
     }
 
+    internal static string RedactUrlForLog(string value)
+    {
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            ? RedactUrlForLog(uri)
+            : value;
+    }
+
+    private static string RedactUrlForLog(Uri uri)
+    {
+        if (string.IsNullOrEmpty(uri.Query))
+        {
+            return uri.AbsoluteUri;
+        }
+
+        var builder = new UriBuilder(uri) { Query = "[REDACTED]" };
+        return builder.Uri.AbsoluteUri;
+    }
+
     private static void AppendFailureHeader(StringBuilder sb, DownloadJob job)
     {
         sb.AppendLine("==== ダウンロード失敗詳細 ====");
         sb.AppendLine($"日時: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine($"タイトル: {job.VideoMetadata.Title}");
-        sb.AppendLine($"URL: {job.VideoMetadata.Url}");
+        sb.AppendLine($"URL: {RedactUrlForLog(job.VideoMetadata.Url)}");
         sb.AppendLine($"形式/品質: {job.Format} / {job.Quality}");
         sb.AppendLine($"保存先: {job.SaveFolderPath}");
     }

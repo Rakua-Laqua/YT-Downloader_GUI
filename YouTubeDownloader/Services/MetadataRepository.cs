@@ -25,6 +25,7 @@ public class MetadataRepository : IMetadataRepository
     private readonly string _metadataFilePath;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILoggingService _logger;
+    private readonly Func<string, string, Task> _writeAllTextAsync;
     // 同時ダウンロードの完了が複数ワーカースレッドから同時に保存してくるため、
     // キャッシュ(List)とファイルI/Oへのアクセスを直列化する
     private readonly SemaphoreSlim _mutex = new(1, 1);
@@ -33,9 +34,18 @@ public class MetadataRepository : IMetadataRepository
     private bool _loaded;
 
     public MetadataRepository(ILoggingService? logger = null)
+        : this(AppStorage.GetAppFilePath("metadata.json"), logger, AtomicFileWriter.WriteAllTextAsync)
+    {
+    }
+
+    internal MetadataRepository(
+        string metadataFilePath,
+        ILoggingService? logger,
+        Func<string, string, Task> writeAllTextAsync)
     {
         _logger = logger ?? new LoggingService();
-        _metadataFilePath = AppStorage.GetAppFilePath("metadata.json");
+        _metadataFilePath = metadataFilePath;
+        _writeAllTextAsync = writeAllTextAsync;
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -74,10 +84,10 @@ public class MetadataRepository : IMetadataRepository
             .ToList();
     }
 
-    private async Task SaveAsync()
+    private async Task SaveAsync(IReadOnlyList<VideoMetadata> snapshot)
     {
-        var json = JsonSerializer.Serialize(_cache, _jsonOptions);
-        await AtomicFileWriter.WriteAllTextAsync(_metadataFilePath, json);
+        var json = JsonSerializer.Serialize(snapshot, _jsonOptions);
+        await _writeAllTextAsync(_metadataFilePath, json);
     }
 
     public async Task SaveVideoMetadataAsync(VideoMetadata metadata)
@@ -87,18 +97,20 @@ public class MetadataRepository : IMetadataRepository
         {
             await LoadIfNeededAsync();
 
-            var existing = _cache.FindIndex(v => v.Id == metadata.Id);
+            var updatedCache = new List<VideoMetadata>(_cache);
+            var existing = updatedCache.FindIndex(v => v.Id == metadata.Id);
             if (existing >= 0)
             {
-                _cache[existing] = metadata;
+                updatedCache[existing] = metadata;
             }
             else
             {
-                _cache.Add(metadata);
+                updatedCache.Add(metadata);
             }
 
+            await SaveAsync(updatedCache);
+            _cache = updatedCache;
             RebuildOrderedCache();
-            await SaveAsync();
         }
         finally
         {
@@ -137,10 +149,12 @@ public class MetadataRepository : IMetadataRepository
         try
         {
             await LoadIfNeededAsync();
-            if (_cache.RemoveAll(v => v.Id == videoId) > 0)
+            var updatedCache = new List<VideoMetadata>(_cache);
+            if (updatedCache.RemoveAll(v => v.Id == videoId) > 0)
             {
+                await SaveAsync(updatedCache);
+                _cache = updatedCache;
                 RebuildOrderedCache();
-                await SaveAsync();
             }
         }
         finally
@@ -162,11 +176,13 @@ public class MetadataRepository : IMetadataRepository
         try
         {
             await LoadIfNeededAsync();
-            var removed = _cache.RemoveAll(v => idSet.Contains(v.Id));
+            var updatedCache = new List<VideoMetadata>(_cache);
+            var removed = updatedCache.RemoveAll(v => idSet.Contains(v.Id));
             if (removed > 0)
             {
+                await SaveAsync(updatedCache);
+                _cache = updatedCache;
                 RebuildOrderedCache();
-                await SaveAsync();
             }
         }
         finally

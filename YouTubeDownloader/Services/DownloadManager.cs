@@ -198,7 +198,7 @@ public class DownloadManager : IDownloadManager, IDisposable
         }
         catch (YtDlpDownloadException ex)
         {
-            _logger.Error($"ジョブ失敗(yt-dlp) [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
+            _logger.Error($"ジョブ失敗(yt-dlp) {YtDlpFailureFormatter.BuildJobLabel(job)}", ex);
             if (string.IsNullOrWhiteSpace(job.FailureDetail) && !string.IsNullOrWhiteSpace(ex.FailureDetail))
             {
                 job.FailureDetail = ex.FailureDetail;
@@ -210,7 +210,7 @@ public class DownloadManager : IDownloadManager, IDisposable
             // yt-dlp固有の失敗詳細は YtDlpClient 側で記録済み。ここは呼び出し境界として、
             // 例外の型とスタックトレース(=どのC#処理で発生したか)を残す。
             // 例: メタデータ保存の失敗もここに来るため、スタックトレースで発生箇所を特定できる。
-            _logger.Error($"ジョブ失敗 [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
+            _logger.Error($"ジョブ失敗 {YtDlpFailureFormatter.BuildJobLabel(job)}", ex);
             MarkJobFailed(job, ex.Message);
         }
         finally
@@ -239,7 +239,7 @@ public class DownloadManager : IDownloadManager, IDisposable
         job.StartedAt = DateTime.Now;
         job.Progress = 0;
         job.IsPostProcessing = false;
-        _logger.Info($"ジョブ開始 [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}> / キュー待機 {queueWait.TotalSeconds:F1}秒");
+        _logger.Info($"ジョブ開始 {YtDlpFailureFormatter.BuildJobLabel(job)} / キュー待機 {queueWait.TotalSeconds:F1}秒");
         JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
     }
 
@@ -260,7 +260,6 @@ public class DownloadManager : IDownloadManager, IDisposable
 
     private async Task CompleteJobAsync(DownloadJob job)
     {
-        job.Status = DownloadStatus.Completed;
         job.Progress = 100;
         job.IsPostProcessing = false;
         job.StatusMessage = null;
@@ -271,11 +270,14 @@ public class DownloadManager : IDownloadManager, IDisposable
         try
         {
             await _metadataRepository.SaveVideoMetadataAsync(job.VideoMetadata);
+            job.Status = DownloadStatus.Completed;
+            job.ErrorMessage = null;
         }
         catch (Exception ex)
         {
-            _logger.Error($"メタデータ保存に失敗しました(ダウンロードは完了) [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>", ex);
-            job.ErrorMessage = $"ダウンロードは完了しましたが、履歴の保存に失敗しました: {ex.Message}";
+            _logger.Error($"メタデータ保存に失敗しました(ダウンロードは完了) {YtDlpFailureFormatter.BuildJobLabel(job)}", ex);
+            job.Status = DownloadStatus.CompletedWithWarning;
+            job.ErrorMessage = "ダウンロードは完了しましたが、履歴を保存できませんでした。ログを確認してください。";
         }
 
         JobStatusChanged?.Invoke(this, new DownloadJobEventArgs(job));
@@ -283,7 +285,7 @@ public class DownloadManager : IDownloadManager, IDisposable
 
     private void MarkJobCanceled(DownloadJob job)
     {
-        _logger.Info($"ジョブをキャンセルしました [{job.VideoMetadata.Title}] <{job.VideoMetadata.Url}>");
+        _logger.Info($"ジョブをキャンセルしました {YtDlpFailureFormatter.BuildJobLabel(job)}");
         var shouldNotify = job.Status != DownloadStatus.Canceled;
         job.Status = DownloadStatus.Canceled;
         if (shouldNotify)
@@ -384,7 +386,7 @@ public class DownloadManager : IDownloadManager, IDisposable
     {
         lock (_lock)
         {
-            _allJobs.RemoveAll(j => j.Status == DownloadStatus.Completed || j.Status == DownloadStatus.Canceled);
+            _allJobs.RemoveAll(j => j.Status is DownloadStatus.Completed or DownloadStatus.CompletedWithWarning or DownloadStatus.Canceled);
         }
     }
 
