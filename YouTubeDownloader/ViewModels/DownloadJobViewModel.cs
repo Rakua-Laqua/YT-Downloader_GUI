@@ -163,6 +163,7 @@ public partial class DownloadJobViewModel : ObservableObject
         sb.AppendLine($"検証結果: {GetFormatVerificationText()}");
         sb.AppendLine($"yt-dlp選択: {BuildFormatSummary(_job.SourceExt, _job.SourceVcodec, _job.SourceAcodec)}");
         sb.AppendLine($"ffprobe実ファイル: {BuildFormatSummary(_job.ActualExt, _job.ActualVcodec, _job.ActualAcodec)}");
+        sb.AppendLine($"詳細タグ: yt-dlp={BuildRawFormatSummary(_job.SourceExt, _job.SourceVcodec, _job.SourceAcodec)} / ffprobe={BuildRawFormatSummary(_job.ActualExt, _job.ActualVcodec, _job.ActualAcodec)}");
 
         if (!string.IsNullOrWhiteSpace(_job.FormatMismatchTooltip))
         {
@@ -193,7 +194,45 @@ public partial class DownloadJobViewModel : ObservableObject
 
     private static string BuildFormatSummary(string? ext, string? vcodec, string? acodec)
     {
+        return $"{FormatContainer(ext)} / {FormatVideoCodec(vcodec)} / {FormatAudioCodec(acodec)}";
+    }
+
+    private static string BuildRawFormatSummary(string? ext, string? vcodec, string? acodec)
+    {
         return $"ext={ValueOrUnknown(ext)} / vcodec={ValueOrUnknown(vcodec)} / acodec={ValueOrUnknown(acodec)}";
+    }
+
+    private static string FormatContainer(string? ext) =>
+        string.IsNullOrWhiteSpace(ext) ? "不明" : ext.ToUpperInvariant();
+
+    private static string FormatVideoCodec(string? codec)
+    {
+        var value = codec?.Trim().ToLowerInvariant();
+        return value switch
+        {
+            null or "" or "none" => "映像なし",
+            _ when value.StartsWith("av01") || value == "av1" => "AV1",
+            _ when value.StartsWith("avc1") || value == "h264" => "H.264",
+            _ when value.StartsWith("hev1") || value.StartsWith("hvc1") || value is "hevc" or "h265" => "H.265/HEVC",
+            _ when value.StartsWith("vp09") || value.StartsWith("vp9") => "VP9",
+            _ when value.StartsWith("vp08") || value.StartsWith("vp8") => "VP8",
+            _ => codec!
+        };
+    }
+
+    private static string FormatAudioCodec(string? codec)
+    {
+        var value = codec?.Trim().ToLowerInvariant();
+        return value switch
+        {
+            null or "" or "none" => "音声なし",
+            _ when value.StartsWith("mp4a") || value == "aac" => "AAC-LC",
+            "opus" => "Opus",
+            "vorbis" => "Vorbis",
+            "mp3" or "mp3float" => "MP3",
+            _ when value.StartsWith("ac-3") || value == "ac3" => "AC-3",
+            _ => codec!
+        };
     }
 
     private static string FormatElapsed(TimeSpan elapsed)
